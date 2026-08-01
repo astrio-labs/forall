@@ -145,7 +145,7 @@ main() {
 
   info ""
   info "Forall CLI installed. Run: forall"
-  info "Staying on Cursor / Claude / Codex? Skip the CLI — use MCP verify-only:"
+  info "Staying on Cursor, Claude Code, or another MCP client? Skip the CLI — use MCP verify-only:"
   info "  1. Create a key at https://forall.astrio.app/dashboard"
   info "  2. npx @astrio/forall-mcp  (see packages/forall-mcp or docs/getting-started.md)"
 }
