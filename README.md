@@ -26,13 +26,13 @@ forall
 
 Add `~/.local/bin` to your `PATH` if needed, then run `forall --version`.
 
-On first launch, sign in with a [Forall account](https://forall.astrio.app/dashboard) (API key) or bring your own model API key (OpenAI / OpenRouter). Then `forall init` in a git repo and start working.
+On first launch, sign in with your [Forall account](https://forall.astrio.app) — your browser opens, no API key to paste. Chat on your plan's hosted models, or bring your own model API key (OpenAI, OpenRouter, Anthropic (Claude), Google Gemini, Azure OpenAI, or Claude via Amazon Bedrock). Then `forall init` in a git repo and start working.
 
 > **Note:** A binary release must exist on [GitHub Releases](https://github.com/astrio-labs/forall/releases) before install succeeds.
 
 ### 2. MCP verify-only
 
-Stay on Cursor, Claude Code, or Codex — add hosted verification via MCP. **Do not** install the CLI.
+Stay on Cursor, Claude Code, or any MCP client — add hosted verification via MCP. **Do not** install the CLI.
 
 1. Create an API key at [forall.astrio.app/dashboard](https://forall.astrio.app/dashboard)
 2. Add to your MCP client:
@@ -60,6 +60,15 @@ Your coding agent edits the workspace from verify reports. See [docs/getting-sta
 - Rust
 
 We are expanding to more languages based on demand.
+
+## Telemetry
+
+First-party builds send product usage analytics — feature and reliability events, never your code or prompts. Opt out any time in `~/.forall/config.toml`:
+
+```toml
+[analytics]
+enabled = false
+```
 
 ## Connect
 

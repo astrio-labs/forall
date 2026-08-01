@@ -45,12 +45,12 @@ Path B: Cursor / Claude Code / Codex
 
 | Audience | Credential | Where it is created / stored |
 |----------|------------|------------------------------|
-| CLI — Forall account | `FORALL_API_KEY` (`forall_…`) | [Dashboard](https://forall.astrio.app/dashboard) → paste in TUI or `forall verification login` |
-| CLI — BYOK | `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | `~/.forall/.env` or `forall login --with-api-key` |
+| CLI — Forall account | Browser sign-in via `forall login` (OAuth) | Hosted models on your plan; a `forall_…` API key still works headless via `forall verification login` |
+| CLI — BYOK | `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `AZURE_OPENAI_API_KEY` / AWS credentials (Bedrock) | `~/.forall/.env` or `forall login --with-api-key` |
 | MCP verify-only | `FORALL_API_KEY` | Same dashboard → MCP client `env` |
 
-Model chat always needs BYOK (or equivalent provider config). The Forall API key
-unlocks hosted verification and account-tied quotas.
+Model chat runs on your Forall plan's hosted models or on BYOK provider keys. A
+Forall account also unlocks hosted verification and account-tied quotas.
 
 ## Open-source components
 

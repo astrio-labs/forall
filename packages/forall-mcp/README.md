@@ -1,6 +1,6 @@
 # `@astrio/forall-mcp`
 
-Stdio MCP bridge to Forall's **hosted verification** service. For Cursor, Claude Code, Codex, and other MCP clients that speak stdio — not the Forall CLI.
+Stdio MCP bridge to Forall's **hosted verification** service. For Cursor, Claude Code, and other MCP clients that speak stdio — not the Forall CLI.
 
 This package does **not** edit your workspace. It only proxies verify tools to `https://mcp.forall.astrio.app/mcp`. Your coding agent applies fixes from the reports.
 
@@ -35,7 +35,7 @@ This package does **not** edit your workspace. It only proxies verify tools to `
 | | CLI | This package |
 |--|-----|--------------|
 | Install | `curl …/install.sh \| bash` | `npx @astrio/forall-mcp` |
-| Audience | Users adopting Forall as their agent | Users staying on Cursor / Claude / Codex |
+| Audience | Users adopting Forall as their agent | Users staying on Cursor / Claude / other hosts |
 | Auth | BYOK and/or Forall OAuth + dashboard key in TUI | Dashboard API key only |
 | Workspace writes | Yes (Forall agent) | No |
 

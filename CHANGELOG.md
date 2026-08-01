@@ -4,6 +4,20 @@ All notable changes to this public repository are documented here.
 
 ## Unreleased
 
+## v0.4.0
+
+- Sign in with your Forall account: `forall login` opens the browser — no API-key paste required.
+- Forall plans include hosted models; bring-your-own-key stays fully supported.
+- Native Anthropic support: Claude models via `ANTHROPIC_API_KEY` (Messages API adapter).
+- Native Google Gemini support via `GEMINI_API_KEY` (generateContent adapter).
+- Azure OpenAI support via `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL`.
+- Claude on Amazon Bedrock using standard AWS credentials (Bedrock API keys are not supported).
+- Privacy: streaming traces record event structure only — chunk bodies are never logged, and wire-supplied labels are bounded.
+- Document product telemetry and the `[analytics] enabled = false` opt-out.
+- Getting-started gains a BYOK provider matrix; auth tables refreshed.
+- `@astrio/forall-mcp` source mirror synced (description refresh).
+- Open-source crates verified in sync with `astrio-labs/forall-core` (`agent/forall-hosted-verify`, `agent/workflow/src/authoring`) as of 2026-07-31.
+
 ## v0.3.0
 
 - Remove apps, connectors, and remote control from the CLI.

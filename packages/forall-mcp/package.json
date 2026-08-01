@@ -1,7 +1,7 @@
 {
   "name": "@astrio/forall-mcp",
   "version": "0.1.0",
-  "description": "Forall hosted verification MCP — stdio bridge for Cursor, Claude Code, and Codex",
+  "description": "Forall hosted verification MCP — stdio bridge for Cursor, Claude Code, and other MCP clients",
   "type": "module",
   "bin": {
     "forall-mcp": "./bin/forall-mcp.js"

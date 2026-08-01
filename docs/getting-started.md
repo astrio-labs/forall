@@ -13,15 +13,16 @@ forall
 
 On first launch, pick:
 
-| Option | What you do |
+| Option | What happens |
 |--------|-------------|
-| **Forall account** | Browser opens [forall.astrio.app/dashboard](https://forall.astrio.app/dashboard) → create a `forall_…` API key → paste it into the TUI → then choose a model provider (BYOK) for chat |
-| **Bring your own API key** | Skip the Forall key for now; set `OPENAI_API_KEY` / `OPENROUTER_API_KEY` in `~/.forall/.env` |
+| **Forall account** | Your browser opens to sign in — then chat on your plan's hosted models, or add BYOK keys any time |
+| **Bring your own API key** | Pick a provider and use keys from `~/.forall/.env` (matrix below) |
 
-CLI equivalent for the Forall key:
+CLI equivalents:
 
 ```bash
-printenv FORALL_API_KEY | forall verification login
+forall login                                          # browser sign-in
+printenv FORALL_API_KEY | forall verification login   # headless, API key
 forall verification status
 ```
 
@@ -33,6 +34,28 @@ forall
 ```
 
 See [Project Layout](project-layout.md) and [Workflow](workflow.md).
+
+### BYOK model providers
+
+Set keys in `~/.forall/.env` (or export them in your shell), then pick the provider during onboarding. Amazon Bedrock is configured through `config.toml` rather than onboarding:
+
+| Provider | Configuration |
+|----------|---------------|
+| OpenAI | `OPENAI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` |
+| Google Gemini | `GEMINI_API_KEY` |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` |
+| Amazon Bedrock (Claude) | Standard AWS credentials (profile / region); Bedrock API keys are not supported |
+
+### Telemetry
+
+First-party builds send product usage analytics — feature and reliability events, never your code or prompts. Opt out in `~/.forall/config.toml`:
+
+```toml
+[analytics]
+enabled = false
+```
 
 ### Supported platforms
 
