@@ -14,35 +14,74 @@ use crate::mapping::schema::{Mapping, PropertyRef, Requirement, validate_mapping
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const MAPPING_PATH: &str = ".forall/verify/mapping.yaml";
 
-// The parameter group in each pattern tolerates one level of nesting
-// (`(?:[^()]|\([^()]*\))*`) so a parameter such as `cb: fn(u32) -> u32` does
-// not truncate the captured signature at its inner `)`. The optional generic
-// group before it lists `->`/`=>` first so an arrow inside a bound is consumed
-// whole rather than read as the closing `>`.
+/// A parenthesised parameter list. One level of nesting keeps a parameter such
+/// as `cb: fn(u32) -> u32` from truncating the captured signature at its inner
+/// `)`.
+const PARAMETERS: &str = r"(\((?:[^()]|\([^()]*\))*\))";
+
+/// How deeply a generic argument list may nest before the pattern stops
+/// recognising it — `IntoIterator<Item = Vec<u8>>` needs three. A regex cannot
+/// balance brackets to arbitrary depth, so this is a bound, not a parser.
+const GENERIC_DEPTH: usize = 4;
+
+/// An optional generic parameter list to sit between a function name and its
+/// parameters. Arrow tokens are listed first so the `>` in `->` or `=>` inside
+/// a bound is consumed whole rather than read as the closing bracket.
+fn optional_generics(depth: usize) -> String {
+    let inner = if depth == 0 {
+        "[^<>]*".to_string()
+    } else {
+        format!("(?:->|=>|[^<>]|{})*", optional_generics(depth - 1))
+    };
+    format!("<{inner}>")
+}
+
 static TYPESCRIPT_FUNCTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?m)^[ \t]*export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]*)(?:<(?:=>|[^<>]|<[^<>]*>)*>)?[ \t]*(\((?:[^()]|\([^()]*\))*\))",
+        &[
+            r"(?m)^[ \t]*export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]*)(?:",
+            &optional_generics(GENERIC_DEPTH),
+            r")?[ \t]*",
+            PARAMETERS,
+        ]
+        .concat(),
     )
     .expect("TypeScript function pattern is valid")
 });
 
 static TYPESCRIPT_ARROW: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?m)^[ \t]*export[ \t]+(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:async[ \t]+)?(\((?:[^()]|\([^()]*\))*\))[ \t]*(?::[^=\n]+)?=>[ \t]*\{",
+        &[
+            r"(?m)^[ \t]*export[ \t]+(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:async[ \t]+)?",
+            PARAMETERS,
+            r"[ \t]*(?::[^=\n]+)?=>[ \t]*\{",
+        ]
+        .concat(),
     )
     .expect("TypeScript arrow pattern is valid")
 });
 
 static RUST_FUNCTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?m)^[ \t]*pub(?:\([^)]*\))?[ \t]+(?:(?:async|const|unsafe)[ \t]+)*fn[ \t]+([A-Za-z_]\w*)(?:<(?:->|[^<>]|<[^<>]*>)*>)?[ \t]*(\((?:[^()]|\([^()]*\))*\))",
+        &[
+            r"(?m)^[ \t]*pub(?:\([^)]*\))?[ \t]+(?:(?:async|const|unsafe)[ \t]+)*fn[ \t]+([A-Za-z_]\w*)(?:",
+            &optional_generics(GENERIC_DEPTH),
+            r")?[ \t]*",
+            PARAMETERS,
+        ]
+        .concat(),
     )
     .expect("Rust function pattern is valid")
 });
 
 static JAVA_METHOD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?m)^[ \t]*public[ \t]+(?:static[ \t]+)?(?:final[ \t]+)?[\w<>\[\], ?]+[ \t]+([A-Za-z_]\w*)[ \t]*(\((?:[^()]|\([^()]*\))*\))[ \t]*(?:throws[^{]+)?\{",
+        &[
+            r"(?m)^[ \t]*public[ \t]+(?:static[ \t]+)?(?:final[ \t]+)?[\w<>\[\], ?]+[ \t]+([A-Za-z_]\w*)[ \t]*",
+            PARAMETERS,
+            r"[ \t]*(?:throws[^{]+)?\{",
+        ]
+        .concat(),
     )
     .expect("Java method pattern is valid")
 });
@@ -1072,17 +1111,25 @@ fn body_brace(
     index = match_delimiter(bytes, open, language)
         .ok_or_else(|| malformed("has an unterminated parameter list"))?;
 
+    let mut annotated = false;
     loop {
         index = skip_trivia(bytes, index);
         match bytes.get(index) {
             None => return Err(malformed("has no function body")),
             Some(b';') => return Err(malformed("has no writable function body")),
+            Some(b':') if language == SourceLanguage::TypeScript => {
+                annotated = true;
+                index += 1;
+            }
             Some(b'{') => {
-                let close = match_delimiter(bytes, index, language)
-                    .ok_or_else(|| malformed("has an unterminated function body"))?;
                 // A TypeScript return type can itself be an object literal
-                // (`): { ok: boolean } {`); the body is what follows it.
-                if language == SourceLanguage::TypeScript
+                // (`): { ok: boolean } {`), in which case the body is what
+                // follows it. Only look ahead inside an annotation: a type is
+                // always balanced, whereas a body need not be — `return /{/`
+                // is legal — and an unbalanced body is taken at face value
+                // rather than rejected.
+                if annotated
+                    && let Some(close) = match_delimiter(bytes, index, language)
                     && bytes.get(skip_trivia(bytes, close)) == Some(&b'{')
                 {
                     index = skip_trivia(bytes, close);

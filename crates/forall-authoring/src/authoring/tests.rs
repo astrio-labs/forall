@@ -300,6 +300,55 @@ fn discovered_signatures_keep_nested_parentheses() {
 }
 
 #[test]
+fn contracts_reach_bodies_that_do_not_balance() {
+    let (_dir, root) = root();
+    // The `{` inside this regex literal never closes, so the body cannot be
+    // balanced. The insertion point is still known and must still be used.
+    write(
+        &root,
+        "src/brace.ts",
+        "export function hasBrace(s: string): boolean {\n  return /{/.test(s);\n}\n",
+    );
+    let mutation = apply_for(&root, &["src/brace.ts"]);
+    scaffold_contracts(
+        &root,
+        &ScaffoldContractsRequest {
+            contracts: vec![ContractTarget {
+                file: "src/brace.ts".into(),
+                symbol: "hasBrace".into(),
+                requires: vec!["s.length > 0".into()],
+                ensures: vec![],
+            }],
+            mutation,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.as_path().join("src/brace.ts")).unwrap(),
+        "export function hasBrace(s: string): boolean {\n  //@ requires s.length > 0\n  return /{/.test(s);\n}\n"
+    );
+}
+
+#[test]
+fn discovery_handles_deeply_nested_generic_bounds() {
+    let (_dir, root) = root();
+    write(
+        &root,
+        "src/parse.rs",
+        "pub fn parse<T: IntoIterator<Item = Vec<u8>>>(input: T) -> usize {\n    0\n}\n",
+    );
+    let discovered = discover_symbols(&root, &["src/parse.rs".to_string()]).unwrap();
+    assert_eq!(
+        discovered
+            .symbols
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .collect::<Vec<_>>(),
+        ["parse"]
+    );
+}
+
+#[test]
 fn discovery_finds_generic_and_annotated_arrow_functions() {
     let (_dir, root) = root();
     write(
