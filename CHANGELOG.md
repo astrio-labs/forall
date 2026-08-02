@@ -4,6 +4,8 @@ All notable changes to this public repository are documented here.
 
 ## Unreleased
 
+- Document C as a supported language (Frama-C/WP proof backend, shipped in v0.4.0).
+
 ## v0.4.0
 
 - Sign in with your Forall account: `forall login` opens the browser — no API-key paste required.

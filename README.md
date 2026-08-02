@@ -58,6 +58,7 @@ Your coding agent edits the workspace from verify reports. See [docs/getting-sta
 - TypeScript
 - Java
 - Rust
+- C
 
 We are expanding to more languages based on demand.
 
