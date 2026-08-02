@@ -20,6 +20,6 @@ This policy covers:
 
 - The `install.sh` script in this repository
 - Documentation and community assets published here
-- Prebuilt `forall` binaries distributed via [GitHub Releases](https://github.com/astrio-ai/forall/releases)
+- Prebuilt `forall` binaries distributed via [GitHub Releases](https://github.com/astrio-labs/forall/releases)
 
 Agent source code is not published in this repository.

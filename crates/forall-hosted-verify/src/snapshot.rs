@@ -163,7 +163,15 @@ impl SnapshotPacker {
 
 fn collect_forall_files(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<(), SnapshotError> {
     let forall_dir = root.join(".forall");
-    if !forall_dir.exists() {
+    // `WalkDir` follows a symlinked walk root even with `follow_links(false)`,
+    // so the root has to be rejected here rather than per entry below.
+    let Some(metadata) = optional_symlink_metadata(&forall_dir)? else {
+        return Ok(());
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(SnapshotError::Symlink(relative_path(root, &forall_dir)?));
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     let entries = WalkDir::new(&forall_dir).follow_links(false).into_iter();
@@ -267,11 +275,32 @@ fn collect_support_files(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<(
     ];
     for relative in EXACT {
         let path = root.join(relative);
-        if path.is_file() {
+        // `Path::is_file` follows symlinks, which would pull a file from
+        // outside the workspace into the snapshot.
+        let Some(metadata) = optional_symlink_metadata(&path)? else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(SnapshotError::Symlink(relative_path(root, &path)?));
+        }
+        if metadata.is_file() {
             paths.insert(path);
         }
     }
     Ok(())
+}
+
+/// Metadata for `path` without following a terminal symlink, treating a
+/// missing path as `None` rather than an error.
+fn optional_symlink_metadata(path: &Path) -> Result<Option<fs::Metadata>, SnapshotError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(SnapshotError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn add_selected_file(

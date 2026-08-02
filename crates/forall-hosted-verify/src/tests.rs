@@ -367,6 +367,77 @@ fn snapshot_rejects_symlinks_without_following_them() {
     ));
 }
 
+#[tokio::test]
+async fn a_plaintext_endpoint_is_refused_before_the_token_is_sent() {
+    // Nothing is listening on this host; reaching the network at all would be
+    // a transport error rather than the rejection asserted here.
+    let refused = client("http://mcp.example.com/mcp".to_string())
+        .initialize()
+        .await;
+    assert!(matches!(
+        refused,
+        Err(HostedVerifyError::InsecureEndpoint(scheme)) if scheme == "http"
+    ));
+
+    let accepted = client("https://mcp.example.com/mcp".to_string())
+        .initialize()
+        .await;
+    assert!(!matches!(
+        accepted,
+        Err(HostedVerifyError::InsecureEndpoint(_))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn verification_snapshot_rejects_symlinked_support_files() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempDir::new().expect("tempdir");
+    let outside = TempDir::new().expect("outside");
+    write(outside.path(), "secret.txt", "secret");
+    write(
+        root.path(),
+        ".forall/verify/mapping.yaml",
+        "version: 1\nrequirements: []\n",
+    );
+    // A root manifest is picked up by name, so it must not be a way to read a
+    // file from outside the workspace.
+    symlink(
+        outside.path().join("secret.txt"),
+        root.path().join("Cargo.toml"),
+    )
+    .expect("symlink");
+
+    assert!(matches!(
+        SnapshotPacker::default().pack_verification_workspace(root.path()),
+        Err(SnapshotError::Symlink(path)) if path == std::path::Path::new("Cargo.toml")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn verification_snapshot_rejects_a_symlinked_forall_directory() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempDir::new().expect("tempdir");
+    let outside = TempDir::new().expect("outside");
+    write(
+        outside.path(),
+        "verify/mapping.yaml",
+        "version: 1\nrequirements: []\n",
+    );
+    write(outside.path(), "private.txt", "secret");
+    // `WalkDir` follows a symlinked walk root, so `.forall` itself has to be
+    // rejected before the walk starts.
+    symlink(outside.path(), root.path().join(".forall")).expect("symlink");
+
+    assert!(matches!(
+        SnapshotPacker::default().pack_verification_workspace(root.path()),
+        Err(SnapshotError::Symlink(path)) if path == std::path::Path::new(".forall")
+    ));
+}
+
 #[test]
 fn github_helper_has_explicit_wire_variant() {
     let source = github_source("owner/repository", "main", Some("packages/app".to_string()));

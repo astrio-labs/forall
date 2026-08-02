@@ -21,9 +21,22 @@ export async function main() {
     );
   }
 
-  const mcpUrl = process.env.FORALL_MCP_URL?.trim() || DEFAULT_MCP_URL;
+  const mcpUrl = new URL(process.env.FORALL_MCP_URL?.trim() || DEFAULT_MCP_URL);
+  const loopback = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(
+    mcpUrl.hostname,
+  );
+  // The API key travels as a bearer header, so refuse any endpoint that would
+  // put it on the wire in cleartext.
+  const secure =
+    mcpUrl.protocol === "https:" || (mcpUrl.protocol === "http:" && loopback);
+  if (!secure) {
+    throw new Error(
+      `FORALL_MCP_URL uses ${mcpUrl.protocol}; https is required so the API key is not sent in cleartext`,
+    );
+  }
+
   const remote = new Client({ name: "forall-mcp-bridge", version: "0.1.0" });
-  const transport = new StreamableHTTPClientTransport(new URL(mcpUrl), {
+  const transport = new StreamableHTTPClientTransport(mcpUrl, {
     requestInit: {
       headers: {
         Authorization: `Bearer ${apiKey}`,
