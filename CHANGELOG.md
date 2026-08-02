@@ -4,6 +4,26 @@ All notable changes to this public repository are documented here.
 
 ## Unreleased
 
+- Security: verification snapshots no longer follow symlinked root manifests or a
+  symlinked `.forall` directory, either of which could send files from outside
+  the workspace to hosted verification.
+- Security: the hosted client and the `@astrio/forall-mcp` bridge refuse a
+  non-loopback `http://` endpoint so the bearer token is never sent in cleartext.
+- Security: `install.sh` verifies a published `<asset>.sha256` when one exists,
+  rejects release archives containing absolute or `..` member paths, and never
+  chmods a symlink out of the unpack directory. Set `FORALL_REQUIRE_CHECKSUM=1`
+  to refuse any download that cannot be verified.
+- Security: workflow actions are pinned to commit SHAs, workflows run with
+  `contents: read`, and Dependabot keeps actions, crates, and npm current.
+- Contract scaffolding no longer corrupts signatures that contain a brace before
+  the body, such as an object parameter, an object return type, or a generic bound.
+- Symbol discovery keeps nested parentheses in signatures and finds generic
+  functions in TypeScript and Rust.
+- `install.sh` now exits when it cannot support the detected OS or architecture
+  instead of continuing with an empty target.
+- The security policy and issue template point at `astrio-labs`, not the retired
+  `astrio-ai` namespace.
+
 ## v0.5.0
 
 - Sign in with GitHub: `forall login` gains GitHub alongside the browser flow — no API-key paste required.
