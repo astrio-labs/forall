@@ -4,7 +4,18 @@ All notable changes to this public repository are documented here.
 
 ## Unreleased
 
+## v0.5.0
+
+- Sign in with GitHub: `forall login` gains GitHub alongside the browser flow — no API-key paste required.
+- Connect a repository once and Forall mints repo-scoped git credentials; agent commits are attributed to your GitHub identity.
+- Forall-branded sign-in success and error pages across the OAuth flows.
+- Verification: proof failures are attributed to the failing file for clearer diagnostics.
+- Spec and proof tool calls are recorded in the thread and replay on `thread/resume`.
+- Model catalog: add the GPT-5.6 family (Sol, Terra, Luna).
+- Privacy: Forall account tokens are sent only to Forall-hosted models, never to bring-your-own-key providers.
+- Show the account's display name across the product.
 - Document C as a supported language (Frama-C/WP proof backend, shipped in v0.4.0).
+- Open-source crates verified in sync with `astrio-labs/forall-core` (`agent/forall-hosted-verify`, `agent/workflow/src/authoring`) as of 2026-08-02.
 
 ## v0.4.0
 
