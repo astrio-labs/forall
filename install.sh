@@ -39,10 +39,74 @@ latest_release_tag() {
 # Prefer an existing binary from PATH for extraction tools only when needed.
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# A regular file that is not a symlink, so `chmod +x` cannot follow a link the
+# archive planted to a file outside the extraction directory.
+is_plain_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+
 download() {
   local url="$1"
   local out="$2"
   curl -fsSL "$url" -o "$out"
+}
+
+sha256_of() {
+  local file="$1"
+  if have_cmd sha256sum; then
+    sha256sum "$file" | awk '{print $1}'
+  elif have_cmd shasum; then
+    shasum -a 256 "$file" | awk '{print $1}'
+  elif have_cmd openssl; then
+    openssl dgst -sha256 "$file" | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
+# Compare "$file" against the "<asset>.sha256" published beside it. Exits 0 on
+# a match, 1 on a mismatch, and 2 when no digest is published or no digest tool
+# is available — the caller decides what to do about 2.
+verify_checksum() {
+  local file="$1" url="$2" digest expected actual
+  digest="$(mktemp)"
+  if ! curl -fsSL "${url}.sha256" -o "$digest" 2>/dev/null; then
+    rm -f "$digest"
+    return 2
+  fi
+  expected="$(tr -d '\r' <"$digest" | awk 'NR==1 {print $1}')"
+  rm -f "$digest"
+  if [ -z "$expected" ]; then
+    return 2
+  fi
+  if ! actual="$(sha256_of "$file")"; then
+    err "no sha256 tool found (sha256sum, shasum, or openssl); cannot verify the download"
+    return 2
+  fi
+  [ "$actual" = "$expected" ]
+}
+
+# Apply the checksum policy to a freshly downloaded file. An unverifiable
+# download is fatal when FORALL_REQUIRE_CHECKSUM=1 and a loud warning otherwise,
+# because releases do not publish digests yet.
+enforce_checksum() {
+  local file="$1" url="$2" asset status=0
+  asset="$(basename "$url")"
+  verify_checksum "$file" "$url" || status=$?
+  case "$status" in
+    0)
+      info "Verified sha256 for ${asset}"
+      ;;
+    2)
+      if [ "${FORALL_REQUIRE_CHECKSUM:-0}" = "1" ]; then
+        err "no published sha256 for ${asset} and FORALL_REQUIRE_CHECKSUM=1"
+        return 1
+      fi
+      err "warning: no published sha256 for ${asset}; this download is unverified"
+      ;;
+    *)
+      err "sha256 mismatch for ${asset}; refusing to install"
+      return 1
+      ;;
+  esac
 }
 
 install_from_archive() {
@@ -69,17 +133,39 @@ install_from_archive() {
     cleanup
     return 1
   fi
+
+  if ! enforce_checksum "$archive" "$url"; then
+    trap - EXIT
+    cleanup
+    exit 1
+  fi
+
+  # Reject absolute or parent-relative members before unpacking so the archive
+  # cannot write outside the extraction directory.
+  local listing
+  if ! listing="$(tar -tzf "$archive")"; then
+    err "release archive could not be read"
+    trap - EXIT
+    cleanup
+    return 1
+  fi
+  if printf '%s\n' "$listing" | grep -qE '^/|(^|/)\.\.(/|$)'; then
+    err "release archive contains unsafe member paths; refusing to extract"
+    trap - EXIT
+    cleanup
+    exit 1
+  fi
   tar -xzf "$archive" -C "$extract_dir"
 
   binary="${extract_dir}/${expected_name}"
-  if [ ! -f "$binary" ]; then
+  if ! is_plain_file "$binary"; then
     # Tolerate archives that store just "forall" / "forall.exe".
-    if [ -f "${extract_dir}/${BINARY_NAME}" ]; then
+    if is_plain_file "${extract_dir}/${BINARY_NAME}"; then
       binary="${extract_dir}/${BINARY_NAME}"
-    elif [ -f "${extract_dir}/${BINARY_NAME}.exe" ]; then
+    elif is_plain_file "${extract_dir}/${BINARY_NAME}.exe"; then
       binary="${extract_dir}/${BINARY_NAME}.exe"
     else
-      err "archive did not contain ${expected_name}"
+      err "archive did not contain ${expected_name} as a regular file"
       trap - EXIT
       cleanup
       return 1
@@ -100,14 +186,23 @@ install_raw_binary() {
     rm -f "$tmp"
     return 1
   fi
+  if ! enforce_checksum "$tmp" "$url"; then
+    rm -f "$tmp"
+    exit 1
+  fi
   chmod +x "$tmp"
   mv "$tmp" "${INSTALL_DIR}/${BINARY_NAME}"
 }
 
 main() {
-  local os arch tag base url
+  local os arch tag base url platform
   mkdir -p "$INSTALL_DIR"
-  read -r os arch <<<"$(detect_platform)"
+  # `exit` inside a command substitution only leaves the subshell, so the
+  # unsupported-platform failure has to be propagated explicitly.
+  if ! platform="$(detect_platform)"; then
+    exit 1
+  fi
+  read -r os arch <<<"$platform"
   tag="$(latest_release_tag || true)"
   if [ -z "${tag:-}" ]; then
     err "no release found at https://github.com/${REPO}/releases yet."
