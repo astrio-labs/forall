@@ -23,6 +23,9 @@ All notable changes to this public repository are documented here.
   instead of continuing with an empty target.
 - The security policy and issue template point at `astrio-labs`, not the retired
   `astrio-ai` namespace.
+- `@astrio/forall-mcp` requires Node 20 or newer. Clearing two advisories in the
+  MCP SDK's transitive dependencies pulled in a package that needs Node 20, and
+  Node 18 has been end-of-life since April 2025.
 
 ## v0.5.0
 
