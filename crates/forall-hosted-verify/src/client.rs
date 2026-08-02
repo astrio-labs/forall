@@ -218,7 +218,7 @@ impl HostedVerificationClient {
         });
         let response = self.post(&token, Some(session), &request).await?;
         let result = validate_json_rpc_response(&response.body, token.expose())?;
-        let payload = tool_payload(result)?;
+        let payload = tool_payload(result, token.expose())?;
         serde_json::from_value(payload)
             .map_err(|error| HostedVerifyError::InvalidResponse(error.to_string()))
     }
@@ -229,6 +229,7 @@ impl HostedVerificationClient {
         session_id: Option<&str>,
         body: &Value,
     ) -> Result<McpResponse, HostedVerifyError> {
+        ensure_secure_endpoint(&self.endpoint)?;
         let mut request = self
             .http
             .post(&self.endpoint)
@@ -284,6 +285,22 @@ struct McpResponse {
     session_id: Option<String>,
 }
 
+/// Refuse to attach the bearer token to a request that would leave the host in
+/// cleartext. Loopback stays allowed so local servers keep working.
+fn ensure_secure_endpoint(endpoint: &str) -> Result<(), HostedVerifyError> {
+    let url = reqwest::Url::parse(endpoint)
+        .map_err(|error| HostedVerifyError::InvalidEndpoint(error.to_string()))?;
+    let loopback = matches!(
+        url.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    );
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if loopback => Ok(()),
+        scheme => Err(HostedVerifyError::InsecureEndpoint(scheme.to_string())),
+    }
+}
+
 fn validate_json_rpc_response<'a>(
     body: &'a Value,
     token: &str,
@@ -304,19 +321,19 @@ fn validate_json_rpc_response<'a>(
         .ok_or_else(|| HostedVerifyError::InvalidResponse("missing JSON-RPC result".to_string()))
 }
 
-fn tool_payload(result: &Value) -> Result<Value, HostedVerifyError> {
+fn tool_payload(result: &Value, token: &str) -> Result<Value, HostedVerifyError> {
     if result.get("isError").and_then(Value::as_bool) == Some(true) {
         let structured = result.get("structuredContent");
         let code = structured
             .and_then(|value| value.get("code"))
             .and_then(Value::as_str)
             .unwrap_or("tool_failed")
-            .to_string();
+            .replace(token, "[REDACTED]");
         let message = structured
             .and_then(|value| value.get("message"))
             .and_then(Value::as_str)
             .unwrap_or("hosted verification tool reported failure")
-            .to_string();
+            .replace(token, "[REDACTED]");
         return Err(HostedVerifyError::ToolFailed { code, message });
     }
     if let Some(structured) = result.get("structuredContent") {
@@ -361,6 +378,12 @@ pub enum HostedVerifyError {
     Transport(reqwest::Error),
     #[error("hosted MCP returned HTTP {0}")]
     HttpStatus(u16),
+    #[error("hosted MCP endpoint is not a valid URL: {0}")]
+    InvalidEndpoint(String),
+    #[error(
+        "hosted MCP endpoint uses {0}; https is required so the bearer token is not sent in cleartext"
+    )]
+    InsecureEndpoint(String),
     #[error("hosted MCP initialize response omitted Mcp-Session-Id")]
     MissingSessionId,
     #[error("hosted MCP error {code}: {message}")]
