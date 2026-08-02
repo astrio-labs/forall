@@ -223,6 +223,109 @@ fn golden_contract_edits_for_three_languages() {
 }
 
 #[test]
+fn contracts_open_the_body_past_braces_in_signatures() {
+    let (_dir, root) = root();
+    // Every signature here carries a `{` before the one that opens the body:
+    // an object parameter, an object return type, and a generic bound.
+    write(
+        &root,
+        "src/pricing.ts",
+        "export function total(order: { net: number }, rate: number): number {\n  return order.net * rate;\n}\n",
+    );
+    write(
+        &root,
+        "src/shape.ts",
+        "export function shape(x: number): { ok: boolean } {\n  return { ok: x > 0 };\n}\n",
+    );
+    write(
+        &root,
+        "src/apply.rs",
+        "pub fn apply<F: Fn(u32) -> u32>(f: F, x: u32) -> u32 {\n    f(x)\n}\n",
+    );
+    let mutation = apply_for(&root, &["src/pricing.ts", "src/shape.ts", "src/apply.rs"]);
+    scaffold_contracts(
+        &root,
+        &ScaffoldContractsRequest {
+            contracts: vec![
+                ContractTarget {
+                    file: "src/pricing.ts".into(),
+                    symbol: "total".into(),
+                    requires: vec!["rate > 0".into()],
+                    ensures: vec![],
+                },
+                ContractTarget {
+                    file: "src/shape.ts".into(),
+                    symbol: "shape".into(),
+                    requires: vec!["x !== 0".into()],
+                    ensures: vec![],
+                },
+                ContractTarget {
+                    file: "src/apply.rs".into(),
+                    symbol: "apply".into(),
+                    requires: vec!["x > 0".into()],
+                    ensures: vec![],
+                },
+            ],
+            mutation,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.as_path().join("src/pricing.ts")).unwrap(),
+        "export function total(order: { net: number }, rate: number): number {\n  //@ requires rate > 0\n  return order.net * rate;\n}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.as_path().join("src/shape.ts")).unwrap(),
+        "export function shape(x: number): { ok: boolean } {\n  //@ requires x !== 0\n  return { ok: x > 0 };\n}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.as_path().join("src/apply.rs")).unwrap(),
+        "pub fn apply<F: Fn(u32) -> u32>(f: F, x: u32) -> u32 \n    requires x > 0,\n{\n    f(x)\n}\n"
+    );
+}
+
+#[test]
+fn discovered_signatures_keep_nested_parentheses() {
+    let (_dir, root) = root();
+    write(
+        &root,
+        "src/lib.rs",
+        "pub fn label(map: Vec<u32>, cb: fn(u32) -> u32) -> u32 {\n    0\n}\n",
+    );
+    let discovered = discover_symbols(&root, &["src/lib.rs".to_string()]).unwrap();
+    assert_eq!(
+        discovered.symbols[0].signature,
+        "label(map: Vec<u32>, cb: fn(u32) -> u32)"
+    );
+}
+
+#[test]
+fn discovery_finds_generic_and_annotated_arrow_functions() {
+    let (_dir, root) = root();
+    write(
+        &root,
+        "src/pick.ts",
+        "export function pick<T extends { id: string }>(v: T): string {\n  return v.id;\n}\n",
+    );
+    write(
+        &root,
+        "src/scale.ts",
+        "export const scale = (x: number): number => {\n  return x;\n};\n",
+    );
+    let discovered = discover_symbols(
+        &root,
+        &["src/pick.ts".to_string(), "src/scale.ts".to_string()],
+    )
+    .unwrap();
+    let names: Vec<_> = discovered
+        .symbols
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+    assert_eq!(names, ["pick", "scale"]);
+}
+
+#[test]
 fn contract_missing_and_ambiguous_symbols_are_structured_errors() {
     let (_dir, root) = root();
     write(

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use regex::Regex;
@@ -12,6 +13,39 @@ use crate::mapping::schema::{Mapping, PropertyRef, Requirement, validate_mapping
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const MAPPING_PATH: &str = ".forall/verify/mapping.yaml";
+
+// The parameter group in each pattern tolerates one level of nesting
+// (`(?:[^()]|\([^()]*\))*`) so a parameter such as `cb: fn(u32) -> u32` does
+// not truncate the captured signature at its inner `)`. The optional generic
+// group before it lists `->`/`=>` first so an arrow inside a bound is consumed
+// whole rather than read as the closing `>`.
+static TYPESCRIPT_FUNCTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)^[ \t]*export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]*)(?:<(?:=>|[^<>]|<[^<>]*>)*>)?[ \t]*(\((?:[^()]|\([^()]*\))*\))",
+    )
+    .expect("TypeScript function pattern is valid")
+});
+
+static TYPESCRIPT_ARROW: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)^[ \t]*export[ \t]+(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:async[ \t]+)?(\((?:[^()]|\([^()]*\))*\))[ \t]*(?::[^=\n]+)?=>[ \t]*\{",
+    )
+    .expect("TypeScript arrow pattern is valid")
+});
+
+static RUST_FUNCTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)^[ \t]*pub(?:\([^)]*\))?[ \t]+(?:(?:async|const|unsafe)[ \t]+)*fn[ \t]+([A-Za-z_]\w*)(?:<(?:->|[^<>]|<[^<>]*>)*>)?[ \t]*(\((?:[^()]|\([^()]*\))*\))",
+    )
+    .expect("Rust function pattern is valid")
+});
+
+static JAVA_METHOD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)^[ \t]*public[ \t]+(?:static[ \t]+)?(?:final[ \t]+)?[\w<>\[\], ?]+[ \t]+([A-Za-z_]\w*)[ \t]*(\((?:[^()]|\([^()]*\))*\))[ \t]*(?:throws[^{]+)?\{",
+    )
+    .expect("Java method pattern is valid")
+});
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -853,19 +887,11 @@ fn parse_symbols(
     language: SourceLanguage,
     source: &str,
 ) -> AuthoringResult<Vec<DiscoveredSymbol>> {
-    let pattern = match language {
-        SourceLanguage::TypeScript => {
-            r"(?m)^[ \t]*export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]*)[ \t]*(\([^)]*\))"
-        }
-        SourceLanguage::Rust => {
-            r"(?m)^[ \t]*pub(?:\([^)]*\))?[ \t]+(?:(?:async|const|unsafe)[ \t]+)*fn[ \t]+([A-Za-z_]\w*)[ \t]*(\([^)]*\))"
-        }
-        SourceLanguage::Java => {
-            r"(?m)^[ \t]*public[ \t]+(?:static[ \t]+)?(?:final[ \t]+)?[\w<>\[\], ?]+[ \t]+([A-Za-z_]\w*)[ \t]*(\([^)]*\))[ \t]*(?:throws[^{]+)?\{"
-        }
+    let regex = match language {
+        SourceLanguage::TypeScript => &*TYPESCRIPT_FUNCTION,
+        SourceLanguage::Rust => &*RUST_FUNCTION,
+        SourceLanguage::Java => &*JAVA_METHOD,
     };
-    let regex =
-        Regex::new(pattern).map_err(|err| error(AuthoringErrorCode::Malformed, err.to_string()))?;
     let mut output = Vec::new();
     for captures in regex.captures_iter(source) {
         let (Some(full), Some(name), Some(params)) =
@@ -895,11 +921,7 @@ fn parse_symbols(
         });
     }
     if language == SourceLanguage::TypeScript {
-        let arrow = Regex::new(
-            r"(?m)^[ \t]*export[ \t]+(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:async[ \t]+)?(\([^)]*\))[ \t]*=>[ \t]*\{",
-        )
-        .map_err(|err| error(AuthoringErrorCode::Malformed, err.to_string()))?;
-        for captures in arrow.captures_iter(source) {
+        for captures in TYPESCRIPT_ARROW.captures_iter(source) {
             let (Some(full), Some(name), Some(params)) =
                 (captures.get(0), captures.get(1), captures.get(2))
             else {
@@ -948,7 +970,7 @@ fn contract_insertion(
     match language {
         SourceLanguage::TypeScript => {
             let tail = &source[line_start..];
-            let brace = body_brace(tail, target)?;
+            let brace = body_brace(tail, language, symbol, target)?;
             let offset = line_start + brace + 1;
             let inner = format!("{indent}  ");
             let existing = leading_contract_lines(&tail[brace + 1..], "//@");
@@ -986,7 +1008,7 @@ fn contract_insertion(
         }
         SourceLanguage::Rust => {
             let tail = &source[line_start..];
-            let brace = body_brace(tail, target)?;
+            let brace = body_brace(tail, language, symbol, target)?;
             let offset = line_start + brace;
             let clause_indent = format!("{indent}    ");
             let existing = &tail[..brace];
@@ -1018,22 +1040,194 @@ fn contract_insertion(
     }
 }
 
-fn body_brace(tail: &str, target: &ContractTarget) -> AuthoringResult<usize> {
-    let brace = tail.find('{').ok_or_else(|| {
+/// Byte offset of the `{` that opens the function body, searching from the
+/// start of the symbol's first line. Generic bounds, the parameter list,
+/// strings and comments are stepped over so their braces are never mistaken
+/// for the body.
+fn body_brace(
+    tail: &str,
+    language: SourceLanguage,
+    symbol: &DiscoveredSymbol,
+    target: &ContractTarget,
+) -> AuthoringResult<usize> {
+    let bytes = tail.as_bytes();
+    let malformed = |detail: &str| {
         path_error(
             AuthoringErrorCode::Malformed,
             &target.file,
-            format!("symbol '{}' has no function body", target.symbol),
+            format!("symbol '{}' {detail}", target.symbol),
         )
-    })?;
-    if tail.find(';').is_some_and(|semicolon| semicolon < brace) {
-        return Err(path_error(
-            AuthoringErrorCode::Malformed,
-            &target.file,
-            format!("symbol '{}' has no writable function body", target.symbol),
-        ));
+    };
+
+    let mut index = tail
+        .find(symbol.name.as_str())
+        .map_or(0, |start| start + symbol.name.len());
+    index = skip_trivia(bytes, index);
+    if bytes.get(index) == Some(&b'<') {
+        index = match_generics(bytes, index, language)
+            .ok_or_else(|| malformed("has an unterminated generic parameter list"))?;
     }
-    Ok(brace)
+    let open =
+        scan_to(bytes, index, language, b'(').ok_or_else(|| malformed("has no parameter list"))?;
+    index = match_delimiter(bytes, open, language)
+        .ok_or_else(|| malformed("has an unterminated parameter list"))?;
+
+    loop {
+        index = skip_trivia(bytes, index);
+        match bytes.get(index) {
+            None => return Err(malformed("has no function body")),
+            Some(b';') => return Err(malformed("has no writable function body")),
+            Some(b'{') => {
+                let close = match_delimiter(bytes, index, language)
+                    .ok_or_else(|| malformed("has an unterminated function body"))?;
+                // A TypeScript return type can itself be an object literal
+                // (`): { ok: boolean } {`); the body is what follows it.
+                if language == SourceLanguage::TypeScript
+                    && bytes.get(skip_trivia(bytes, close)) == Some(&b'{')
+                {
+                    index = skip_trivia(bytes, close);
+                    continue;
+                }
+                return Ok(index);
+            }
+            Some(b'"' | b'\'' | b'`') => index = skip_quoted(bytes, index, language),
+            Some(_) => index += 1,
+        }
+    }
+}
+
+/// Index of the next `target` byte that is real code, skipping over string
+/// literals and comments.
+fn scan_to(bytes: &[u8], mut index: usize, language: SourceLanguage, target: u8) -> Option<usize> {
+    while let Some(byte) = bytes.get(index) {
+        match *byte {
+            byte if byte == target => return Some(index),
+            b'"' | b'\'' | b'`' => index = skip_quoted(bytes, index, language),
+            b'/' if matches!(bytes.get(index + 1), Some(b'/' | b'*')) => {
+                index = skip_trivia(bytes, index);
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn skip_trivia(bytes: &[u8], mut index: usize) -> usize {
+    loop {
+        match bytes.get(index) {
+            Some(byte) if byte.is_ascii_whitespace() => index += 1,
+            Some(b'/') => match bytes.get(index + 1) {
+                Some(b'/') => {
+                    index += 2;
+                    while bytes.get(index).is_some_and(|byte| *byte != b'\n') {
+                        index += 1;
+                    }
+                }
+                Some(b'*') => {
+                    index += 2;
+                    while index < bytes.len()
+                        && !(bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/'))
+                    {
+                        index += 1;
+                    }
+                    index = bytes.len().min(index + 2);
+                }
+                _ => return index,
+            },
+            _ => return index,
+        }
+    }
+}
+
+/// Index just past the closing quote of the literal starting at `index`. A
+/// Rust lifetime (`'a`) is not a literal, so it advances a single byte.
+fn skip_quoted(bytes: &[u8], index: usize, language: SourceLanguage) -> usize {
+    let quote = bytes[index];
+    if quote == b'\'' && language == SourceLanguage::Rust && !is_char_literal(bytes, index) {
+        return index + 1;
+    }
+    let mut cursor = index + 1;
+    while let Some(byte) = bytes.get(cursor) {
+        match *byte {
+            b'\\' => cursor += 2,
+            byte if byte == quote => return cursor + 1,
+            _ => cursor += 1,
+        }
+    }
+    cursor
+}
+
+fn is_char_literal(bytes: &[u8], index: usize) -> bool {
+    match bytes.get(index + 1) {
+        Some(b'\\') => true,
+        Some(_) => bytes.get(index + 2) == Some(&b'\''),
+        None => false,
+    }
+}
+
+/// Index just past the bracket matching the one at `open`.
+fn match_delimiter(bytes: &[u8], open: usize, language: SourceLanguage) -> Option<usize> {
+    let opening = *bytes.get(open)?;
+    let closing = match opening {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        _ => return None,
+    };
+    let mut depth = 0_usize;
+    let mut index = open;
+    while let Some(byte) = bytes.get(index) {
+        match *byte {
+            b'"' | b'\'' | b'`' => {
+                index = skip_quoted(bytes, index, language);
+                continue;
+            }
+            b'/' if matches!(bytes.get(index + 1), Some(b'/' | b'*')) => {
+                index = skip_trivia(bytes, index);
+                continue;
+            }
+            byte if byte == opening => depth += 1,
+            byte if byte == closing => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Index just past the `>` closing the generic list at `open`. Arrow and
+/// return tokens (`=>`, `->`) are consumed whole so their `>` does not read
+/// as a closing bracket.
+fn match_generics(bytes: &[u8], open: usize, language: SourceLanguage) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut index = open;
+    while let Some(byte) = bytes.get(index) {
+        match *byte {
+            b'"' | b'\'' | b'`' => {
+                index = skip_quoted(bytes, index, language);
+            }
+            b'=' | b'-' if bytes.get(index + 1) == Some(&b'>') => index += 2,
+            b'(' => index = match_delimiter(bytes, index, language)?,
+            b'<' => {
+                depth += 1;
+                index += 1;
+            }
+            b'>' => {
+                depth -= 1;
+                index += 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    None
 }
 
 fn leading_contract_lines(source: &str, marker: &str) -> String {
