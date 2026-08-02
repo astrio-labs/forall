@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Workflow actions are pinned to commit SHAs, so this is what keeps them
+  # current once a pin goes stale.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: "/packages/forall-mcp"
+    schedule:
+      interval: weekly

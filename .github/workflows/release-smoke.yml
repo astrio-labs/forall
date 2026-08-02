@@ -1,5 +1,8 @@
 name: Release smoke test
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   push:
@@ -12,7 +15,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Run shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
@@ -21,7 +24,7 @@ jobs:
   install-dry-run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Verify install script metadata
         run: |
           set -euo pipefail
