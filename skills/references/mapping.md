@@ -6,12 +6,15 @@ File: `.forall/verify/mapping.yaml` (project) or
 ## Top level
 
 ```yaml
-version: 1
+version: 2
 requirements:
   - id: ...
 ```
 
-`version` must be `1`.
+`version` is `1` (legacy: claim flags allowed as scope markers) or `2`
+(current: flag-free; evidence comes only from the verify ledger).
+Migrate a v1 mapping with `forall mapping migrate`. In a version-2 file,
+writing `verified:`/`property_tested:` is a validation error.
 
 ## Requirement fields
 

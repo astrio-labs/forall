@@ -33,9 +33,9 @@ pub struct Requirement {
     pub id: String,
     pub capability: String,
     pub requirement: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub verified: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub property_tested: bool,
     #[serde(default)]
     pub property: Option<PropertyRef>,
@@ -262,6 +262,36 @@ pub fn validate_mapping(mapping: &Mapping) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod serialization_tests {
+    use super::*;
+
+    #[test]
+    fn false_flags_are_not_serialized_so_v2_files_stay_flag_free() {
+        // Version-2 mappings drop the claim flags entirely; a serde
+        // round-trip (migrate, archive merge) must not reintroduce
+        // `verified: false` noise into files the docs call flag-free.
+        let mapping = Mapping {
+            version: 2,
+            requirements: vec![Requirement {
+                id: "R".to_string(),
+                capability: "cap".to_string(),
+                requirement: "text".to_string(),
+                verified: false,
+                property_tested: false,
+                property: None,
+                code: None,
+                contract: None,
+                claimcheck: None,
+                scenarios: None,
+            }],
+        };
+        let yaml = serde_yaml::to_string(&mapping).unwrap();
+        assert!(!yaml.contains("verified"), "got: {yaml}");
+        assert!(!yaml.contains("property_tested"), "got: {yaml}");
+    }
 }
 
 #[cfg(test)]
