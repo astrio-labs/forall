@@ -317,6 +317,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "forall-authoring",
+ "forall-wire",
  "reqwest",
  "schemars",
  "serde",
@@ -326,6 +327,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "forall-wire"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

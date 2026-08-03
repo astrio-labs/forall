@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mockup-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8642",
+        "--directory",
+        "/private/tmp/claude-501/-Users-naingoolwin-Projects-forall-public--claude-worktrees-forall-specs-proofs-9b6796/9bf32950-901b-46ea-8231-a9b414867f33/scratchpad"
+      ],
+      "port": 8642
+    }
+  ]
+}
