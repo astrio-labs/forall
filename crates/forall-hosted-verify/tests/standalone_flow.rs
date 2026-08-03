@@ -183,6 +183,7 @@ async fn authors_validates_packages_and_submits_without_a_local_mcp() {
             phases: Vec::new(),
             pbt_seed: Some(42),
             pbt_examples: Some(100),
+            requirement_ids: None,
         })
         .await
         .expect("hosted submit");

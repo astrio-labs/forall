@@ -73,7 +73,7 @@ fn parse(name: &str) -> StatusVerificationResponse {
 fn succeeded_status_parses_with_the_full_report() {
     let response = parse("succeeded_status.json");
 
-    assert_eq!(response.contract_version, 1);
+    assert_eq!(response.contract_version, 2);
     assert_eq!(response.status, VerificationStatus::Succeeded);
     assert_eq!(
         response.source_revision.as_deref(),
