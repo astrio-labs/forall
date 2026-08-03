@@ -118,6 +118,62 @@ pub struct VerificationResult {
     #[serde(default)]
     pub verified_files: Vec<String>,
     pub verification_summary: VerificationSummary,
+    /// The obligation ledger: per requirement, claimed vs EARNED evidence
+    /// level with the prover identity behind each verdict. Absent on runs
+    /// predating ledger emission.
+    #[serde(default)]
+    pub ledger: Option<VerificationLedger>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VerificationLedger {
+    pub version: u32,
+    #[serde(default)]
+    pub change: Option<String>,
+    #[serde(default)]
+    pub entries: Vec<VerificationLedgerEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VerificationLedgerEntry {
+    pub requirement_id: String,
+    #[serde(default)]
+    pub code: Option<VerificationCodeRef>,
+    pub claimed_level: String,
+    pub earned_level: String,
+    #[serde(default)]
+    pub file_sha256: Option<String>,
+    #[serde(default)]
+    pub symbol_fingerprints: Vec<VerificationSymbolFingerprint>,
+    #[serde(default)]
+    pub requirement_sha256: Option<String>,
+    #[serde(default)]
+    pub obligations: Vec<VerificationObligation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VerificationCodeRef {
+    pub file: String,
+    pub symbols: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VerificationSymbolFingerprint {
+    pub symbol: String,
+    pub full: String,
+    pub code: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VerificationObligation {
+    pub description: String,
+    pub file: String,
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    pub status: String,
+    pub tool: String,
+    #[serde(default)]
+    pub tool_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
