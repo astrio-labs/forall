@@ -155,6 +155,7 @@ async fn initializes_session_and_calls_all_hosted_tools() {
             phases: vec![VerificationPhase::Proofs],
             pbt_seed: None,
             pbt_examples: None,
+            requirement_ids: None,
         })
         .await
         .expect("submit");
