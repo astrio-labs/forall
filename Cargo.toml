@@ -13,13 +13,14 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 axum = { version = "0.8", default-features = false }
 forall-authoring = { path = "crates/forall-authoring" }
 forall-wire = { path = "crates/forall-wire" }
 regex = "1.12.3"
 reqwest = { version = "0.12", features = ["cookies"] }
 rmcp = { version = "1.7.0", default-features = false }
-schemars = "0.8.22"
+schemars = { version = "1.2", features = ["chrono04"] }
 serde = "1"
 serde_json = "1"
 serde_yaml = "0.9"
