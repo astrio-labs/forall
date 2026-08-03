@@ -86,15 +86,25 @@ static JAVA_METHOD: LazyLock<Regex> = LazyLock::new(|| {
     .expect("Java method pattern is valid")
 });
 
+/// A GCC/Clang `__attribute__((...))` specifier, with one level of nested
+/// parentheses inside the double parens (`aligned(4)`, `format(printf, 1, 2)`).
+const C_ATTRIBUTE: &str = r"__attribute__[ \t]*\(\((?:[^()]|\([^()]*\))*\)\)";
+
 /// Top-level definitions only (no indentation), body brace on the same line
 /// or the next (Allman braces are common in C). Prototypes end in `;` after
 /// the parameter list, so they fail the `{`/end-of-line alternative. Control
 /// statements that sneak past the shape (`else if (x) {`) are dropped by the
-/// keyword filter in `parse_symbols`.
+/// keyword filter in `parse_symbols`. Attributes may lead the declaration or
+/// sit between type tokens and the name — common in exactly the firmware
+/// code this targets.
 static C_FUNCTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         &[
-            r"(?m)^(?:static[ \t]+)?(?:inline[ \t]+)?[A-Za-z_]\w*(?:[ \t]+[A-Za-z_]\w*)*[ \t*]+([A-Za-z_]\w*)[ \t]*",
+            r"(?m)^(?:static[ \t]+)?(?:inline[ \t]+)?(?:",
+            C_ATTRIBUTE,
+            r"[ \t]+)?[A-Za-z_]\w*(?:[ \t]+(?:",
+            C_ATTRIBUTE,
+            r"|[A-Za-z_]\w*))*[ \t*]+([A-Za-z_]\w*)[ \t]*",
             PARAMETERS,
             r"[ \t]*(?:\{|$)",
         ]
@@ -464,10 +474,14 @@ pub fn discover_project_symbols(
     languages: &[SourceLanguage],
 ) -> AuthoringResult<DiscoverSymbolsOutput> {
     let selected: BTreeSet<SourceLanguage> = if languages.is_empty() {
+        // Every supported language: an omission here silently filters a
+        // language out of project-wide discovery while direct file discovery
+        // still works, which reads as "no symbols found" rather than an error.
         [
             SourceLanguage::TypeScript,
             SourceLanguage::Rust,
             SourceLanguage::Java,
+            SourceLanguage::C,
         ]
         .into_iter()
         .collect()

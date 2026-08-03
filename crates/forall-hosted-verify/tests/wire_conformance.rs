@@ -7,11 +7,15 @@
 //! crate, these fixtures are what stops silent drift. Change a wire type or
 //! fixture on either side and you must update the twin in the same change.
 //!
-//! Client types deliberately do NOT round-trip to identical JSON (absent
-//! optionals serialize as explicit nulls here), so this side asserts parsed
-//! values and re-parse stability, not byte equality.
+//! Client types deliberately do NOT serialize back to byte-identical JSON
+//! (absent optionals become explicit nulls here), so equality is asserted
+//! structurally: every field the fixture carries must survive the round trip
+//! with the same value. Fields the client drops or renames therefore fail
+//! here even when no assertion below happens to name them.
 
 use std::path::Path;
+
+use serde_json::Value;
 
 use forall_hosted_verify::{
     StatusVerificationResponse, VerificationIssueSeverity, VerificationPhaseStatus,
@@ -25,16 +29,43 @@ fn fixture(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
 }
 
+/// Every key the fixture has, at every depth, must be present in the client's
+/// re-serialization with an equal value. Extra keys on the client side (the
+/// null-filled optionals) are allowed; missing or changed ones are not — that
+/// is the drift this suite exists to catch.
+fn assert_covers(fixture: &Value, client: &Value, path: &str) {
+    match fixture {
+        Value::Object(expected) => {
+            let actual = client
+                .as_object()
+                .unwrap_or_else(|| panic!("{path}: client dropped object"));
+            for (key, value) in expected {
+                let found = actual
+                    .get(key)
+                    .unwrap_or_else(|| panic!("{path}/{key}: field missing after round trip"));
+                assert_covers(value, found, &format!("{path}/{key}"));
+            }
+        }
+        Value::Array(expected) => {
+            let actual = client
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: client dropped array"));
+            assert_eq!(expected.len(), actual.len(), "{path}: array length changed");
+            for (index, value) in expected.iter().enumerate() {
+                assert_covers(value, &actual[index], &format!("{path}[{index}]"));
+            }
+        }
+        scalar => assert_eq!(scalar, client, "{path}: value changed after round trip"),
+    }
+}
+
 fn parse(name: &str) -> StatusVerificationResponse {
     let raw = fixture(name);
     let parsed: StatusVerificationResponse =
         serde_json::from_str(&raw).expect("server fixture parses with client DTOs");
-    // Re-serialize and re-parse: whatever the client emits must at least be
-    // stable under its own parser, or downstream caching breaks.
-    let reserialized = serde_json::to_string(&parsed).expect("client DTO serializes");
-    let reparsed: StatusVerificationResponse =
-        serde_json::from_str(&reserialized).expect("client DTO re-parses its own output");
-    assert_eq!(parsed, reparsed, "{name}: client DTO not self-stable");
+    let reserialized = serde_json::to_value(&parsed).expect("client DTO serializes");
+    let original: Value = serde_json::from_str(&raw).expect("fixture is JSON");
+    assert_covers(&original, &reserialized, name);
     parsed
 }
 

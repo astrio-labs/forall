@@ -184,6 +184,13 @@ fn discovers_c_functions_and_filters_control_flow() {
             "frame_status_t frame_validate(const uint8_t *buf, size_t len) {\n",
             "    return FRAME_OK;\n",
             "}\n",
+            "int __attribute__((warn_unused_result)) parse_frame(void)\n",
+            "{\n",
+            "    return 0;\n",
+            "}\n",
+            "__attribute__((noreturn)) void die(void) {\n",
+            "    for (;;) {}\n",
+            "}\n",
             "void frame_reset(void);\n",
         ),
     );
@@ -191,7 +198,10 @@ fn discovers_c_functions_and_filters_control_flow() {
     let symbols: Vec<&str> = found.symbols.iter().map(|s| s.symbol.as_str()).collect();
     // Definitions with Allman and same-line braces are found; the `else if`
     // inside a body and the trailing prototype are not.
-    assert_eq!(symbols, vec!["crc16", "frame_validate"]);
+    assert_eq!(
+        symbols,
+        vec!["crc16", "frame_validate", "parse_frame", "die"]
+    );
     assert_eq!(found.symbols[0].line, 2);
     assert_eq!(
         found.symbols[1].signature,
