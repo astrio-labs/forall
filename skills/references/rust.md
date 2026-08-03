@@ -65,5 +65,5 @@ code:
 1. Fix `requires` / `ensures` or the body
 2. Keep proofs honest — no unproven `assume`
 3. Re-run hosted `forall_verify`
-4. Do not downgrade `verified: true` because proofs are hard; simplify the
+4. Do not downgrade `verified: true` because proofs are hard (the ledger records earned outcomes regardless); simplify the
    contract or shrink the verified surface

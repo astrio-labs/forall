@@ -56,4 +56,4 @@ Avoid until core lemmas pass:
 1. Read hosted `proofs` issues / `proof_detail`
 2. Simplify ensures; split methods if needed
 3. Keep hard array logic spec-tracked temporarily
-4. Never flip `verified: true` → false only to silence failures on core logic
+4. Never flip `verified: true` → false to silence failures — the flag is proof scope; the ledger records what was actually earned either way
