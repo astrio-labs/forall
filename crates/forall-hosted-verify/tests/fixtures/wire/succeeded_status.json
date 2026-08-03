@@ -1,0 +1,51 @@
+{
+  "contract_version": 1,
+  "job_id": "job_9f3a2c11d4e5",
+  "status": "succeeded",
+  "submitted_at": "2026-08-02T18:04:05Z",
+  "updated_at": "2026-08-02T18:06:41Z",
+  "source_revision": "4f2c9c3c1a0b7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
+  "result": {
+    "ok": false,
+    "strict": true,
+    "phases": {
+      "structure": "PASS",
+      "mapping": "PASS",
+      "proofs": "FAIL",
+      "intent": "PASS",
+      "scenarios": "SKIP",
+      "property-tests": "PASS",
+      "scenario-tests": "SKIP"
+    },
+    "issues": [
+      {
+        "severity": "CRITICAL",
+        "phase": "proofs",
+        "requirement_id": "REQ-007",
+        "message": "proof check failed for src/frame.c (requirements: REQ-007): goal frame_validate_ensures unproved",
+        "file": "src/frame.c",
+        "proof_detail": "tool: framac Frama-C 32.1 (Iron)\nstdout:\n[wp] Proved goals: 13 / 14\nstderr:\n"
+      },
+      {
+        "severity": "WARNING",
+        "phase": "property-tests",
+        "requirement_id": "REQ-014",
+        "message": "property run shrank a failing case",
+        "file": "src/dose.c",
+        "counterexample": { "requested": 4294967295, "limit": 100 }
+      },
+      {
+        "severity": "INFO",
+        "phase": "proofs",
+        "message": "proofs failed with the toolchain available; inspect the goal list"
+      }
+    ],
+    "verified_files": ["src/frame.c", "src/crc.c"],
+    "verification_summary": {
+      "total_requirements": 9,
+      "proved_requirements": 4,
+      "property_tested_requirements": 2,
+      "spec_tracked_requirements": 3
+    }
+  }
+}

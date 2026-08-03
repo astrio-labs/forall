@@ -163,6 +163,88 @@ fn discovers_three_languages_and_overloads() {
 }
 
 #[test]
+fn discovers_c_functions_and_filters_control_flow() {
+    let (_dir, root) = root();
+    write(
+        &root,
+        "src/frame.c",
+        concat!(
+            "#include \"frame.h\"\n",
+            "static uint16_t crc16(const uint8_t *data, size_t len)\n",
+            "{\n",
+            "    uint16_t crc = 0;\n",
+            "    if (len == 0) {\n",
+            "        return crc;\n",
+            "    }\n",
+            "    else if (len > MAX) {\n",
+            "        return crc;\n",
+            "    }\n",
+            "    return crc;\n",
+            "}\n",
+            "frame_status_t frame_validate(const uint8_t *buf, size_t len) {\n",
+            "    return FRAME_OK;\n",
+            "}\n",
+            "int __attribute__((warn_unused_result)) parse_frame(void)\n",
+            "{\n",
+            "    return 0;\n",
+            "}\n",
+            "__attribute__((noreturn)) void die(void) {\n",
+            "    for (;;) {}\n",
+            "}\n",
+            "void frame_reset(void);\n",
+        ),
+    );
+    let found = discover_symbols(&root, &["src/frame.c".into()]).unwrap();
+    let symbols: Vec<&str> = found.symbols.iter().map(|s| s.symbol.as_str()).collect();
+    // Definitions with Allman and same-line braces are found; the `else if`
+    // inside a body and the trailing prototype are not.
+    assert_eq!(
+        symbols,
+        vec!["crc16", "frame_validate", "parse_frame", "die"]
+    );
+    assert_eq!(found.symbols[0].line, 2);
+    assert_eq!(
+        found.symbols[1].signature,
+        "frame_validate(const uint8_t *buf, size_t len)"
+    );
+}
+
+#[test]
+fn golden_contract_edit_for_c_places_acsl_above_declaration() {
+    let (_dir, root) = root();
+    write(
+        &root,
+        "src/frame.c",
+        "static uint16_t crc16(const uint8_t *data, size_t len)\n{\n    return 0;\n}\n",
+    );
+    let mutation = apply_for(&root, &["src/frame.c"]);
+    scaffold_contracts(
+        &root,
+        &ScaffoldContractsRequest {
+            contracts: vec![ContractTarget {
+                file: "src/frame.c".into(),
+                symbol: "crc16".into(),
+                requires: vec![r"\valid_read(data + (0 .. len - 1));".into()],
+                ensures: vec![r"\result == crc16_spec(data, len);".into()],
+            }],
+            mutation,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.as_path().join("src/frame.c")).unwrap(),
+        concat!(
+            "//@ requires \\valid_read(data + (0 .. len - 1));\n",
+            "//@ ensures \\result == crc16_spec(data, len);\n",
+            "static uint16_t crc16(const uint8_t *data, size_t len)\n",
+            "{\n",
+            "    return 0;\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
 fn golden_contract_edits_for_three_languages() {
     let (_dir, root) = root();
     write(

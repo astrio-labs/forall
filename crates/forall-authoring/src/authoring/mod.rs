@@ -86,6 +86,37 @@ static JAVA_METHOD: LazyLock<Regex> = LazyLock::new(|| {
     .expect("Java method pattern is valid")
 });
 
+/// A GCC/Clang `__attribute__((...))` specifier, with one level of nested
+/// parentheses inside the double parens (`aligned(4)`, `format(printf, 1, 2)`).
+const C_ATTRIBUTE: &str = r"__attribute__[ \t]*\(\((?:[^()]|\([^()]*\))*\)\)";
+
+/// Top-level definitions only (no indentation), body brace on the same line
+/// or the next (Allman braces are common in C). Prototypes end in `;` after
+/// the parameter list, so they fail the `{`/end-of-line alternative. Control
+/// statements that sneak past the shape (`else if (x) {`) are dropped by the
+/// keyword filter in `parse_symbols`. Attributes may lead the declaration or
+/// sit between type tokens and the name — common in exactly the firmware
+/// code this targets.
+static C_FUNCTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        &[
+            r"(?m)^(?:static[ \t]+)?(?:inline[ \t]+)?(?:",
+            C_ATTRIBUTE,
+            r"[ \t]+)?[A-Za-z_]\w*(?:[ \t]+(?:",
+            C_ATTRIBUTE,
+            r"|[A-Za-z_]\w*))*[ \t*]+([A-Za-z_]\w*)[ \t]*",
+            PARAMETERS,
+            r"[ \t]*(?:\{|$)",
+        ]
+        .concat(),
+    )
+    .expect("C function pattern is valid")
+});
+
+const C_KEYWORDS: &[&str] = &[
+    "if", "else", "for", "while", "switch", "return", "sizeof", "do",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthoringErrorCode {
@@ -375,6 +406,7 @@ pub enum SourceLanguage {
     TypeScript,
     Rust,
     Java,
+    C,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,7 +455,7 @@ pub fn discover_symbols(
             path_error(
                 AuthoringErrorCode::Malformed,
                 file,
-                "supported source extensions are .ts, .tsx, .rs, and .java",
+                "supported source extensions are .ts, .tsx, .rs, .java, .c, and .h",
             )
         })?;
         output
@@ -442,10 +474,14 @@ pub fn discover_project_symbols(
     languages: &[SourceLanguage],
 ) -> AuthoringResult<DiscoverSymbolsOutput> {
     let selected: BTreeSet<SourceLanguage> = if languages.is_empty() {
+        // Every supported language: an omission here silently filters a
+        // language out of project-wide discovery while direct file discovery
+        // still works, which reads as "no symbols found" rather than an error.
         [
             SourceLanguage::TypeScript,
             SourceLanguage::Rust,
             SourceLanguage::Java,
+            SourceLanguage::C,
         ]
         .into_iter()
         .collect()
@@ -917,6 +953,7 @@ fn language_for_path(file: &str) -> Option<SourceLanguage> {
         "ts" | "tsx" => Some(SourceLanguage::TypeScript),
         "rs" => Some(SourceLanguage::Rust),
         "java" => Some(SourceLanguage::Java),
+        "c" | "h" => Some(SourceLanguage::C),
         _ => None,
     }
 }
@@ -930,6 +967,7 @@ fn parse_symbols(
         SourceLanguage::TypeScript => &*TYPESCRIPT_FUNCTION,
         SourceLanguage::Rust => &*RUST_FUNCTION,
         SourceLanguage::Java => &*JAVA_METHOD,
+        SourceLanguage::C => &*C_FUNCTION,
     };
     let mut output = Vec::new();
     for captures in regex.captures_iter(source) {
@@ -939,6 +977,9 @@ fn parse_symbols(
             continue;
         };
         let name = name.as_str().to_string();
+        if language == SourceLanguage::C && C_KEYWORDS.contains(&name.as_str()) {
+            continue;
+        }
         let params = params.as_str();
         let signature = format!("{name}{params}");
         let selector = if language == SourceLanguage::Java {
@@ -1028,7 +1069,10 @@ fn contract_insertion(
             Ok((!annotations.is_empty())
                 .then(|| (offset, format!("{eol}{}", annotations.join(eol)))))
         }
-        SourceLanguage::Java => {
+        // JML and ACSL share the `//@` line-annotation form above the
+        // declaration, so Java and C scaffold identically; only the checker
+        // downstream differs (OpenJML vs Frama-C).
+        SourceLanguage::Java | SourceLanguage::C => {
             let existing = trailing_contract_lines(&source[..line_start], "//@");
             for clause in &target.requires {
                 let line = format!("{indent}//@ requires {clause}");
