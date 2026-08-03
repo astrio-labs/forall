@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "job_id": "job_7b6c5d4e3f2a",
+  "status": "failed",
+  "submitted_at": "2026-08-02T18:04:05Z",
+  "updated_at": "2026-08-02T18:05:10Z",
+  "error": {
+    "code": "worker_crashed",
+    "message": "verification worker exited before producing a report",
+    "retryable": true
+  }
+}
