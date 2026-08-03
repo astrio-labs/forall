@@ -90,7 +90,7 @@ pub struct SubmitVerificationResponse {
     pub contract_version: u32,
     pub job_id: String,
     pub status: VerificationStatus,
-    pub submitted_at: String,
+    pub submitted_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub source_revision: Option<String>,
     pub poll_after_ms: u64,
@@ -233,8 +233,8 @@ pub struct StatusVerificationResponse {
     pub contract_version: u32,
     pub job_id: String,
     pub status: VerificationStatus,
-    pub submitted_at: String,
-    pub updated_at: String,
+    pub submitted_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub source_revision: Option<String>,
     #[serde(default)]

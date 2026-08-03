@@ -1,1 +1,4 @@
 /target/
+
+# Session-local editor/agent scratch config
+.claude/launch.json
