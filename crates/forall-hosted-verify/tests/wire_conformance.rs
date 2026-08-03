@@ -97,6 +97,18 @@ fn succeeded_status_parses_with_the_full_report() {
         "proofs-phase detail leads with the prover identity line"
     );
     assert!(result.issues[1].counterexample.is_some());
+    let ledger = result
+        .ledger
+        .as_ref()
+        .expect("ledger rides inside the report");
+    assert_eq!(ledger.entries.len(), 1);
+    assert_eq!(ledger.entries[0].requirement_id, "REQ-007");
+    assert_eq!(ledger.entries[0].claimed_level, "proved");
+    assert_eq!(ledger.entries[0].earned_level, "contracted");
+    assert_eq!(
+        ledger.entries[0].obligations[0].tool_version.as_deref(),
+        Some("Frama-C 32.1 (Iron)")
+    );
     assert!(result.issues[2].requirement_id.is_none());
     assert_eq!(result.verification_summary.total_requirements, 9);
     assert_eq!(result.verification_summary.proved_requirements, 4);

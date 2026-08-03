@@ -32,7 +32,10 @@
         "requirement_id": "REQ-014",
         "message": "property run shrank a failing case",
         "file": "src/dose.c",
-        "counterexample": { "requested": 4294967295, "limit": 100 }
+        "counterexample": {
+          "requested": 4294967295,
+          "limit": 100
+        }
       },
       {
         "severity": "INFO",
@@ -40,12 +43,52 @@
         "message": "proofs failed with the toolchain available; inspect the goal list"
       }
     ],
-    "verified_files": ["src/frame.c", "src/crc.c"],
+    "verified_files": [
+      "src/frame.c",
+      "src/crc.c"
+    ],
     "verification_summary": {
       "total_requirements": 9,
       "proved_requirements": 4,
       "property_tested_requirements": 2,
       "spec_tracked_requirements": 3
+    },
+    "ledger": {
+      "version": 1,
+      "entries": [
+        {
+          "requirement_id": "REQ-007",
+          "code": {
+            "file": "src/frame.c",
+            "symbols": [
+              "frame_validate"
+            ]
+          },
+          "claimed_level": "proved",
+          "earned_level": "contracted",
+          "file_sha256": "4f2c9c3c1a0b7d6e5f4a3b2c1d0e9f8a7b6c5d4e4f2c9c3c1a0b7d6e5f4a3b2c",
+          "symbol_fingerprints": [
+            {
+              "symbol": "frame_validate",
+              "full": "a1b2c3",
+              "code": "d4e5f6"
+            }
+          ],
+          "requirement_sha256": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
+          "obligations": [
+            {
+              "description": "formal proof obligations for src/frame.c discharged by framac",
+              "file": "src/frame.c",
+              "symbols": [
+                "frame_validate"
+              ],
+              "status": "failed",
+              "tool": "framac",
+              "tool_version": "Frama-C 32.1 (Iron)"
+            }
+          ]
+        }
+      ]
     }
   }
 }
