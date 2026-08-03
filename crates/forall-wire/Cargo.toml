@@ -1,0 +1,11 @@
+[package]
+name = "forall-wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Forall hosted-verification wire contract: one source of truth for the DTOs shared by the service, the client crate, and external consumers."
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

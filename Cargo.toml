@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/forall-authoring",
     "crates/forall-hosted-verify",
+    "crates/forall-wire",
 ]
 
 [workspace.package]
@@ -14,6 +15,7 @@ license = "Apache-2.0"
 anyhow = "1"
 axum = { version = "0.8", default-features = false }
 forall-authoring = { path = "crates/forall-authoring" }
+forall-wire = { path = "crates/forall-wire" }
 regex = "1.12.3"
 reqwest = { version = "0.12", features = ["cookies"] }
 rmcp = { version = "1.7.0", default-features = false }

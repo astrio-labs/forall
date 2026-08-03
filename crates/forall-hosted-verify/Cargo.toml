@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+forall-wire = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
