@@ -83,6 +83,11 @@ pub struct SubmitVerificationRequest {
     pub pbt_seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pbt_examples: Option<u32>,
+    /// Verify only these requirements — incremental re-verification of a
+    /// changed requirement instead of a whole-project run. Absent means
+    /// every requirement. Requires contract version 2 on the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requirement_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
