@@ -154,7 +154,7 @@ User-facing language: **Forall verified** / **machine-checked**.
 ## Guardrails
 
 - Never claim success from an empty mapping / structure-only pass
-- Never downgrade `verified: true` to silence failures
+- Never downgrade `verified: true` to silence failures — the flag is proof scope; earned outcomes live in the report's `ledger` (claimed vs earned levels, per-obligation prover identity) and hosted results now include it
 - Prefer GitHub source when the revision is already public
 - Keep API keys out of the repo and chat logs
 - Cancel long jobs with `forall_cancel_verification` if the user aborts

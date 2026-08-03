@@ -6,12 +6,15 @@ File: `.forall/verify/mapping.yaml` (project) or
 ## Top level
 
 ```yaml
-version: 1
+version: 2
 requirements:
   - id: ...
 ```
 
-`version` must be `1`.
+`version` is `1` (legacy: claim flags allowed as scope markers) or `2`
+(current: flag-free; evidence comes only from the verify ledger).
+Migrate a v1 mapping with `forall mapping migrate`. In a version-2 file,
+writing `verified:`/`property_tested:` is a validation error.
 
 ## Requirement fields
 
@@ -20,8 +23,8 @@ requirements:
 | `id` | yes | Stable kebab-case id |
 | `capability` | yes | Grouping label |
 | `requirement` | yes | One-sentence SHALL |
-| `verified` | no (default false) | Formal proof required |
-| `property_tested` | no | Property-test required |
+| `verified` | no (default false) | Proof SCOPE marker (v1): intent, not evidence |
+| `property_tested` | no | Property-test scope marker (v1) |
 | `code.file` | for verify/PBT | Repo-relative source path |
 | `code.symbols` | for verify/PBT | Function / method names |
 | `contract` | recommended | Human-readable pre/post sketch |
@@ -32,11 +35,19 @@ requirements:
 
 ## Tiers
 
-1. **Proved** — `verified: true` + contracts in source + proofs phase pass
-2. **Property-tested** — `property_tested: true` + scenario file pass
-3. **Spec-tracked** — mapped only (`verified: false`, no PBT)
+Tiers are EARNED by `forall check` and recorded in the verify ledger
+(`*-ledger.json` beside the verify reports) — the mapping's flags state
+scope, never outcomes. Version-2 mappings (`forall mapping migrate`) drop
+the flags entirely; evidence levels come only from the ledger.
 
-Default for finite deterministic logic: **proved**.
+1. **Proved** — every proof obligation discharged in the latest check
+2. **Property-tested** — seeded property run passed
+3. **Spec-tracked** — mapped, no machine evidence yet
+
+Default scope for finite deterministic logic: **proved**. Never edit
+`*-ledger.json` by hand — it is sealed, and a hand-edited ledger reads as
+no evidence at all. Report proof status from the ledger and verify
+report, not from mapping flags.
 
 ## Examples
 

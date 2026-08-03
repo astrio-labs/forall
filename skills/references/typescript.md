@@ -49,4 +49,4 @@ code:
 
 1. Read `proofs` phase issues from hosted status
 2. Tighten `//@ requires` / `//@ ensures` or fix the implementation
-3. Re-verify — do not flip `verified: false` to silence failures
+3. Re-verify — `verified` marks proof scope; evidence lives in the sealed verify ledger, so flipping the flag changes intent, never outcomes

@@ -32,7 +32,7 @@ context: |
   Author mapping and contracts locally; verify with forall_verify.
 rules:
   verification:
-    - Keep verified: true requirements machine-checked before claiming success
+    - Report proof status from the verify ledger, never from mapping flags
     - Prefer hosted forall_verify over skipping formal checks
 ```
 
