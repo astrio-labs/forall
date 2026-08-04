@@ -74,16 +74,7 @@ rung depends on the tool behind it:
   but nothing has confirmed it yet.
 - **Proved** — a prover discharged that contract's obligations.
 
-`Proved` comes from a prover, one per language: LemmaScript → Dafny for
-TypeScript, Verus for Rust, OpenJML for Java, and Frama-C for C. Python has no
-prover, so property tests are its strongest rung.
-
-`Property tested` runs on the bundled Node and Python runners, which is why it
-is available for TypeScript and Python only. The generator library itself —
-fast-check or Hypothesis — is your project's own dependency.
-
-We are expanding to more languages, and to more rungs within the languages
-already listed, based on demand.
+We are expanding to more languages, and to filling in more of this table for the languages already listed, based on demand.
 
 ## Telemetry
 
