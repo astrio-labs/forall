@@ -55,12 +55,35 @@ Your coding agent edits the workspace from verify reports. See [docs/getting-sta
 
 ## Supported programming languages
 
-- TypeScript
-- Java
-- Rust
-- C
+Forall grades every requirement by the strongest evidence a machine actually
+produced for it. Not every rung is reachable in every language, because the
+rung depends on the tool behind it:
 
-We are expanding to more languages based on demand.
+| | Spec tracked | Property tested | Contracted | Proved |
+| --- | :---: | :---: | :---: | :---: |
+| **TypeScript** | ✓ | ✓ | ✓ | ✓ |
+| **Python** | ✓ | ✓ | ✓ | ✗ |
+| **Rust** | ✓ | ✗ | ✓ | ✓ |
+| **Java** | ✓ | ✗ | ✓ | ✓ |
+| **C** | ✓ | ✗ | ✓ | ✓ |
+
+- **Spec tracked** — a requirement cites this code.
+- **Property tested** — a generator ran over many inputs and found no
+  counterexample. Statistical evidence, honestly ranked below a proof.
+- **Contracted** — a machine-checkable contract is written against the code,
+  but nothing has confirmed it yet.
+- **Proved** — a prover discharged that contract's obligations.
+
+`Proved` comes from a prover, one per language: LemmaScript → Dafny for
+TypeScript, Verus for Rust, OpenJML for Java, and Frama-C for C. Python has no
+prover, so property tests are its strongest rung.
+
+`Property tested` runs on the bundled Node and Python runners, which is why it
+is available for TypeScript and Python only. The generator library itself —
+fast-check or Hypothesis — is your project's own dependency.
+
+We are expanding to more languages, and to more rungs within the languages
+already listed, based on demand.
 
 ## Telemetry
 
