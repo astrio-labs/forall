@@ -1,17 +1,48 @@
-<div align="left">
-
-<h1>Forall (∀)</h1>
-
-<p>Forall is a coding agent from Astrio that helps developers build correct software by generating spec-driven code alongside machine-checkable proofs.</p>
-
-<p>
-  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square" /></a>
-  <a href="https://discord.com/invite/gESuZkdD5R"><img alt="Discord" src="https://img.shields.io/badge/Discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
+<p align="center">
+  <a href="https://github.com/astrio-labs/forall">
+    <picture>
+      <source srcset="assets/forall_bg.png">
+      <img src="assets/forall_bg.png" alt="Forall Background">
+    </picture>
+  </a>
 </p>
 
-<img alt="Forall CLI" src="assets/forall-cli.png" width="800" />
+<p align="center">
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square" /></a>
+  <a href="https://discord.com/invite/gESuZkdD5R"><img alt="Discord" src="https://img.shields.io/badge/Discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
+  <a href="https://x.com/astriolabs"><img src="https://img.shields.io/badge/Follow%20on%20X-222021?logo=x&logoColor=white" alt="Follow on X"></a>
+</p>
 
+<div align="center">
+  <img alt="Forall CLI" src="assets/forall-cli.png" width="800" />
 </div>
+
+## Why Forall exists
+
+Review has always been the bottleneck in software. It is now the failure point,
+because code is produced faster than anyone can check it. Tests sample a
+handful of inputs. Types constrain shape. Neither tells you whether the code
+does what it was supposed to do.
+
+Formal verification answers that question, as far as your specification states
+it, and it never failed on capability. Provers have been checking real programs
+for years. What kept them out of ordinary engineering was adoption cost.
+Writing the specifications, contracts and invariants a prover needs was more
+tedious than writing the code itself. That is precisely the work language
+models are now good at. The barrier was labour, and labour just got cheap.
+
+Evidence can therefore become a build artifact rather than something
+reconstructed by hand long after the code is done. Regulated work already
+depends on it. Standards such as IEC 62304 and DO-178C require traceability
+from each requirement to the verification that discharges it. Mission-critical
+code should carry that evidence the way a paper carries its references,
+attached to the specific claim it supports.
+
+A green mark that lies is worse than no mark. A proof is only as strong as the
+contract it discharges, and property testing only samples. Those differences
+matter, so Forall reports four levels of evidence instead of a pass and a fail,
+grading every requirement by the strongest evidence a machine actually
+produced, never by what was claimed.
 
 ## Two ways to use Forall
 
