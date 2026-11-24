@@ -50,7 +50,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
@@ -66,6 +65,7 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
+use forall_analytics::AnalyticsEventsClient;
 use forall_analytics::AppServerRpcTransport;
 use forall_app_server_protocol::ClientNotification;
 use forall_app_server_protocol::ClientRequest;
@@ -81,7 +81,6 @@ use forall_config::CloudConfigBundleLoader;
 use forall_config::LoaderOverrides;
 use forall_config::ThreadConfigLoader;
 use forall_core::config::Config;
-use forall_core::resolve_installation_id;
 use forall_exec_server::EnvironmentManager;
 use forall_feedback::ForallFeedback;
 use forall_login::AuthManager;
@@ -373,7 +372,6 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
 
 async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
-    let installation_id = resolve_installation_id(&args.config.forall_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
@@ -382,8 +380,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         let auth_manager =
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_forall_api_key_env)
                 .await;
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+        let analytics_events_client = AnalyticsEventsClient::disabled();
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -430,13 +427,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 config: args.config,
                 config_manager,
                 environment_manager: args.environment_manager,
-                feedback: args.feedback,
                 log_db: args.log_db,
                 state_db: args.state_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 auth_manager,
-                installation_id,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
             }));

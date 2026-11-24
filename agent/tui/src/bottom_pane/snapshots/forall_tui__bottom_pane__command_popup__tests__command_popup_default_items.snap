@@ -36,7 +36,7 @@ expression: commands
 /mcp - list configured MCP tools; use /mcp verbose for details
 /logout - log out of Forall
 /exit - exit Forall
-/feedback - send logs to maintainers
+/feedback - show where to report an issue
 /rollout - print the rollout file path
 /ps - list background terminals
 /stop - stop all background terminals

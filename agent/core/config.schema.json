@@ -87,25 +87,6 @@
         }
       ]
     },
-    "AnalyticsConfigToml": {
-      "additionalProperties": false,
-      "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
-      "properties": {
-        "api_key_env": {
-          "description": "Env var name for the telemetry ingest API key. Defaults to `FORALL_ANALYTICS_API_KEY`. First-party release builds may also embed a write key at compile time.",
-          "type": "string"
-        },
-        "enabled": {
-          "description": "When `false`, disables analytics across Forall product surfaces in this profile. Defaults to enabled (Codex-style). Opt out explicitly.",
-          "type": "boolean"
-        },
-        "endpoint": {
-          "description": "Product analytics ingest URL. Host-only values get `/v1/analytics/events` appended. When unset, first-party builds use `https://telemetry.forall.astrio.app`.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -267,9 +248,6 @@
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
       "properties": {
-        "analytics": {
-          "$ref": "#/definitions/AnalyticsConfigToml"
-        },
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
         },
@@ -848,16 +826,6 @@
           "$ref": "#/definitions/TokenBudgetConfigToml"
         }
       ]
-    },
-    "FeedbackConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "description": "When `false`, disables the feedback flow across Forall product surfaces.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
     },
     "FileSystemAccessMode": {
       "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `deny` beats `write`, and `write` beats `read`.",
@@ -1990,190 +1958,6 @@
         },
         "skills": {
           "$ref": "#/definitions/OrchestratorFeatureToml"
-        }
-      },
-      "type": "object"
-    },
-    "OtelConfigToml": {
-      "additionalProperties": false,
-      "description": "OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.",
-      "properties": {
-        "api_key_env": {
-          "description": "Env var name for the OTLP ingest Bearer token. Defaults to `FORALL_OTEL_API_KEY`.",
-          "type": "string"
-        },
-        "endpoint": {
-          "description": "Base OTLP URL (host). Unset exporters default to OTLP/HTTP JSON on `/v1/{logs,traces,metrics}`.",
-          "type": "string"
-        },
-        "environment": {
-          "description": "Mark traces with environment (dev, staging, prod, test). Defaults to dev.",
-          "type": "string"
-        },
-        "exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional log exporter"
-        },
-        "log_user_prompt": {
-          "description": "Log user prompt in traces",
-          "type": "boolean"
-        },
-        "metrics_exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional metrics exporter"
-        },
-        "span_attributes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Attributes to add to every exported trace span.",
-          "type": "object"
-        },
-        "trace_exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional trace exporter"
-        },
-        "tracestate": {
-          "additionalProperties": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "description": "Semicolon-separated `key:value` fields to upsert into W3C tracestate members.",
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "OtelExporterKind": {
-      "description": "Which OTEL exporter to use.",
-      "oneOf": [
-        {
-          "enum": [
-            "none"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "otlp-http": {
-              "additionalProperties": false,
-              "properties": {
-                "endpoint": {
-                  "type": "string"
-                },
-                "headers": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {},
-                  "type": "object"
-                },
-                "protocol": {
-                  "$ref": "#/definitions/OtelHttpProtocol"
-                },
-                "tls": {
-                  "allOf": [
-                    {
-                      "$ref": "#/definitions/OtelTlsConfig"
-                    }
-                  ],
-                  "default": null
-                }
-              },
-              "required": [
-                "endpoint",
-                "protocol"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "otlp-http"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "otlp-grpc": {
-              "additionalProperties": false,
-              "properties": {
-                "endpoint": {
-                  "type": "string"
-                },
-                "headers": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {},
-                  "type": "object"
-                },
-                "tls": {
-                  "allOf": [
-                    {
-                      "$ref": "#/definitions/OtelTlsConfig"
-                    }
-                  ],
-                  "default": null
-                }
-              },
-              "required": [
-                "endpoint"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "otlp-grpc"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "OtelHttpProtocol": {
-      "oneOf": [
-        {
-          "description": "Binary payload",
-          "enum": [
-            "binary"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "JSON payload",
-          "enum": [
-            "json"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "OtelTlsConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "ca-certificate": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "client-certificate": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "client-private-key": {
-          "$ref": "#/definitions/AbsolutePathBuf"
         }
       },
       "type": "object"
@@ -4453,14 +4237,6 @@
       "description": "Whether the model may request a login shell for shell-based tools. Default to `true`\n\nIf `true`, the model may request a login shell (`login = true`), and omitting `login` defaults to using a login shell. If `false`, the model can never use a login shell: `login = true` requests are rejected, and omitting `login` defaults to a non-login shell.",
       "type": "boolean"
     },
-    "analytics": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/AnalyticsConfigToml"
-        }
-      ],
-      "description": "When `false`, disables analytics across Forall product surfaces in this machine. Defaults to `true`."
-    },
     "approval_policy": {
       "allOf": [
         {
@@ -4909,14 +4685,6 @@
       },
       "type": "object"
     },
-    "feedback": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/FeedbackConfigToml"
-        }
-      ],
-      "description": "When `false`, disables feedback collection across Forall product surfaces. Defaults to `true`."
-    },
     "file_opener": {
       "allOf": [
         {
@@ -5138,14 +4906,6 @@
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
-    },
-    "otel": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/OtelConfigToml"
-        }
-      ],
-      "description": "OTEL configuration."
     },
     "permissions": {
       "allOf": [

@@ -393,77 +393,19 @@ fn slack_feedback_url(_thread_id: &str) -> String {
     CODEX_FEEDBACK_INTERNAL_URL.to_string()
 }
 
-// Build the selection popup params for feedback categories.
-pub(crate) fn feedback_selection_params(
-    app_event_tx: AppEventSender,
-) -> super::SelectionViewParams {
-    super::SelectionViewParams {
-        title: Some("How was this?".to_string()),
-        items: vec![
-            make_feedback_item(
-                app_event_tx.clone(),
-                "bug",
-                "Crash, error message, hang, or broken UI/behavior.",
-                FeedbackCategory::Bug,
-            ),
-            make_feedback_item(
-                app_event_tx.clone(),
-                "bad result",
-                "Output was off-target, incorrect, incomplete, or unhelpful.",
-                FeedbackCategory::BadResult,
-            ),
-            make_feedback_item(
-                app_event_tx.clone(),
-                "good result",
-                "Helpful, correct, high‑quality, or delightful result worth celebrating.",
-                FeedbackCategory::GoodResult,
-            ),
-            make_feedback_item(
-                app_event_tx.clone(),
-                "safety check",
-                "Benign usage blocked due to safety checks or refusals.",
-                FeedbackCategory::SafetyCheck,
-            ),
-            make_feedback_item(
-                app_event_tx,
-                "other",
-                "Slowness, feature suggestion, UX feedback, or anything else.",
-                FeedbackCategory::Other,
-            ),
-        ],
-        ..Default::default()
-    }
-}
-
 /// Build the selection popup params shown when feedback is disabled.
 pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     super::SelectionViewParams {
         title: Some("Sending feedback is disabled".to_string()),
-        subtitle: Some("This action is disabled by configuration.".to_string()),
+        subtitle: Some(
+            "Report an issue at https://github.com/astrio-labs/forall/issues.".to_string(),
+        ),
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![super::SelectionItem {
             name: "Close".to_string(),
             dismiss_on_select: true,
             ..Default::default()
         }],
-        ..Default::default()
-    }
-}
-
-fn make_feedback_item(
-    app_event_tx: AppEventSender,
-    name: &str,
-    description: &str,
-    category: FeedbackCategory,
-) -> super::SelectionItem {
-    let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
-        app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
-    });
-    super::SelectionItem {
-        name: name.to_string(),
-        description: Some(description.to_string()),
-        actions: vec![action],
-        dismiss_on_select: true,
         ..Default::default()
     }
 }

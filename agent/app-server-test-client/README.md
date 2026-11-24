@@ -22,76 +22,9 @@ cargo run -p forall-app-server-test-client -- model-list
 When Forall asks a question, choose a numbered option (or `o` for a free-form answer when offered)
 and the client will send the response and continue streaming the same turn.
 
-## Testing Plugin Analytics
+## Removing a remote plugin
 
-The `plugin-analytics-smoke` command exercises `plugin/installed`, plugin
-enable/disable config writes, and a structured plugin mention through one
-app-server connection. Analytics are captured to a local JSONL file and are
-not sent to the analytics backend. The model turn uses a loopback Responses
-API server.
-
-The selected plugin must already be installed and enabled remotely, and the
-active Forall profile must be authenticated. On a fresh local cache, the command
-retries ephemeral turns while the installed remote bundle finishes syncing.
-
-```bash
-# Build a debug Forall binary; analytics capture is unavailable in release builds.
-cargo build -p forall-cli --bin forall
-
-cargo run -p forall-app-server-test-client -- \
-  --forall-bin ./target/debug/forall \
-  plugin-analytics-smoke \
-  --plugin-id linear@openai-curated-remote
-```
-
-Use `--capture-file /tmp/plugin-analytics.jsonl` to select the output path.
-The command validates one `forall_plugin_disabled`, `forall_plugin_enabled`, and
-`forall_plugin_used` event with the expected local plugin identity and capability
-metadata. The enabled and disabled events come from successful writes to the
-temporary config; the command does not mutate the remote enabled state. It
-prints the events and leaves the JSONL file in place for inspection. It does not
-install or uninstall plugins and does not modify the profile's persistent
-config.
-
-### Testing remote install and uninstall analytics
-
-`plugin-analytics-mutation-smoke` is a manually invoked live smoke test. It
-contacts the configured remote plugin API and temporarily changes the active
-account's installed-plugin state. It is not run by `cargo test`, `just test`,
-or CI.
-
-Choose a remote plugin that is available to the active account and is not
-currently installed. The command refuses to run when the plugin is already
-installed, installs it, validates `forall_plugin_installed`, uninstalls it, and
-verifies that the original uninstalled state was restored. The current install
-event uses the backend ID as `plugin_id`. Uninstall is part of cleanup but is
-not yet an analytics assertion.
-
-`--remote-plugin-id` takes the backend ID, such as `plugins~Plugin_...`, not the
-local `<plugin>@<marketplace>` ID.
-
-```bash
-cargo run -p forall-app-server-test-client -- \
-  --forall-bin ./target/debug/forall \
-  plugin-analytics-mutation-smoke \
-  --remote-plugin-id <REMOTE_PLUGIN_ID> \
-  --confirm-account-mutation \
-  --capture-file /tmp/plugin-mutation-analytics.jsonl
-```
-
-Analytics use the normal queue, reduction, batching, and serialization path,
-but the debug capture destination suppresses analytics network delivery. The
-command prints one of these final states:
-
-- `PASS`: the install event validated and the plugin is uninstalled.
-- `FAIL-CLEAN`: validation failed, but the original uninstalled state was
-  restored.
-- `FAIL-LOCAL-CACHE`: the backend is uninstalled, but local cleanup reported
-  an error.
-- `FAIL-DIRTY`: cleanup failed and the plugin still appears installed.
-- `FAIL-UNKNOWN`: the command could not verify the final installed state.
-
-For a dirty or uncertain result, retry cleanup with:
+To uninstall a plugin from the active account, run the following command.
 
 ```bash
 cargo run -p forall-app-server-test-client -- \
@@ -100,10 +33,6 @@ cargo run -p forall-app-server-test-client -- \
   --remote-plugin-id <REMOTE_PLUGIN_ID> \
   --confirm-account-mutation
 ```
-
-Cleanup does not require analytics capture or a debug Forall binary. When the
-smoke uses global `--config` overrides, its printed recovery command preserves
-them so cleanup targets the same backend and account.
 
 ## Watching Raw Inbound Traffic
 

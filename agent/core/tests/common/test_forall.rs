@@ -19,7 +19,6 @@ use forall_core::StartThreadOptions;
 use forall_core::ThreadManager;
 use forall_core::TimeProvider;
 use forall_core::config::Config;
-use forall_core::resolve_installation_id;
 use forall_core::shell::Shell;
 use forall_core::shell::get_shell_by_model_provided_path;
 use forall_core::thread_store_from_config;
@@ -570,7 +569,6 @@ impl TestForallBuilder {
         let auth = self.auth.clone();
         let state_db = forall_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());
-        let installation_id = resolve_installation_id(&config.forall_home).await?;
         let user_instructions_provider =
             self.user_instructions_provider.clone().unwrap_or_else(|| {
                 Arc::new(ForallHomeUserInstructionsProvider::new(
@@ -587,7 +585,6 @@ impl TestForallBuilder {
             /*analytics_events_client*/ None,
             thread_store,
             state_db.clone(),
-            installation_id,
             /*attestation_provider*/ None,
             /*external_time_provider*/ self.external_time_provider.clone(),
             /*external_browser_opener*/ None,

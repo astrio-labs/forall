@@ -46,11 +46,6 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::mount_analytics_capture;
-use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
-
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
@@ -530,44 +525,6 @@ fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
 #[cfg(not(windows))]
 fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
     path.as_ref().to_path_buf()
-}
-
-#[tokio::test]
-async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-
-    let forall_home = TempDir::new()?;
-    create_config_toml_with_backend_url(forall_home.path(), &server.uri(), &server.uri())?;
-    mount_analytics_capture(&server, forall_home.path()).await?;
-
-    let mut mcp = TestAppServer::new_without_managed_config(forall_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let req_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            thread_source: Some(ThreadSource::User),
-            ..Default::default()
-        })
-        .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
-
-    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
-    assert_eq!(payload["events"].as_array().expect("events array").len(), 1);
-    let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(
-        event,
-        &thread.id,
-        &thread.session_id,
-        "mock-model",
-        "new",
-        "user",
-    );
-    Ok(())
 }
 
 #[tokio::test]

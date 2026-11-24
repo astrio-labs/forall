@@ -48,8 +48,6 @@ use forall_config::types::Notice;
 use forall_config::types::NotificationCondition;
 use forall_config::types::NotificationMethod;
 use forall_config::types::Notifications;
-use forall_config::types::OtelConfigToml;
-use forall_config::types::OtelExporterKind;
 use forall_config::types::SandboxWorkspaceWrite;
 use forall_config::types::SessionPickerViewMode;
 use forall_config::types::SkillsConfig;
@@ -5192,26 +5190,6 @@ fn local_dev_builds_force_file_mcp_oauth_store_modes() {
     );
 }
 
-#[tokio::test]
-async fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
-    let forall_home = TempDir::new()?;
-    let cfg = ConfigToml {
-        feedback: Some(FeedbackConfigToml::default()),
-        ..Default::default()
-    };
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        forall_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(config.feedback_enabled, true);
-
-    Ok(())
-}
-
 #[test]
 fn web_search_mode_defaults_to_none_if_unset() {
     let cfg = ConfigToml::default();
@@ -8294,170 +8272,6 @@ async fn legacy_profile_selection_is_rejected() -> std::io::Result<()> {
         err.to_string()
             .contains("legacy `profile = \"gpt3\"` config is no longer supported"),
         "unexpected error: {err}"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
-    let fixture = create_test_fixture()?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        fixture.cfg.clone(),
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.forall_home(),
-    )
-    .await?;
-
-    assert_eq!(config.otel.metrics_exporter, OtelExporterKind::None);
-    Ok(())
-}
-
-#[tokio::test]
-async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::Result<()> {
-    let fixture = create_test_fixture()?;
-    let mut cfg = fixture.cfg.clone();
-    cfg.otel = Some(OtelConfigToml {
-        exporter: Some(OtelExporterKind::OtlpHttp {
-            endpoint: "http://localhost:14318/v1/logs".to_string(),
-            headers: HashMap::new(),
-            protocol: forall_config::types::OtelHttpProtocol::Binary,
-            tls: None,
-        }),
-        metrics_exporter: Some(OtelExporterKind::None),
-        ..Default::default()
-    });
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.forall_home(),
-    )
-    .await?;
-
-    assert!(matches!(
-        config.otel.exporter,
-        OtelExporterKind::OtlpHttp { .. }
-    ));
-    assert_eq!(config.otel.trace_exporter, OtelExporterKind::None);
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
-    let mut fixture = create_test_fixture()?;
-    fixture.cfg = toml::from_str(
-        r#"
-[otel.span_attributes]
-"example.trace_attr" = "enabled"
-
-[otel.tracestate.example]
-alpha = "one"
-beta = "two"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let config = Config::load_from_base_config_with_overrides(
-        fixture.cfg.clone(),
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.forall_home(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.otel.span_attributes,
-        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
-    );
-    assert_eq!(
-        config.otel.tracestate,
-        BTreeMap::from([(
-            "example".to_string(),
-            BTreeMap::from([
-                ("alpha".to_string(), "one".to_string()),
-                ("beta".to_string(), "two".to_string()),
-            ]),
-        )])
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_drops_invalid_otel_trace_metadata_entries() -> std::io::Result<()> {
-    let mut fixture = create_test_fixture()?;
-    fixture.cfg = toml::from_str(
-        r#"
-[otel]
-environment = "test"
-
-[otel.span_attributes]
-"" = "missing-key"
-"example.trace_attr" = "enabled"
-
-[otel.tracestate.example]
-alpha = "one"
-beta = "two\ntoo"
-
-[otel.tracestate.bad]
-alpha = "one\ntwo"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let config = Config::load_from_base_config_with_overrides(
-        fixture.cfg.clone(),
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.forall_home(),
-    )
-    .await?;
-
-    assert_eq!(config.otel.environment, "test");
-    assert_eq!(
-        config.otel.span_attributes,
-        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
-    );
-    assert_eq!(
-        config.otel.tracestate,
-        BTreeMap::from([(
-            "example".to_string(),
-            BTreeMap::from([("alpha".to_string(), "one".to_string())]),
-        )])
-    );
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Ignoring invalid `otel.span_attributes` config")
-                && warning.contains("configured span attribute key must not be empty")
-        }),
-        "{:?}",
-        config.startup_warnings
-    );
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Ignoring invalid `otel.tracestate` config")
-                && warning.contains("invalid configured tracestate value for example.beta")
-        }),
-        "{:?}",
-        config.startup_warnings
-    );
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Ignoring invalid `otel.tracestate` config")
-                && warning.contains("invalid configured tracestate value for bad.alpha")
-        }),
-        "{:?}",
-        config.startup_warnings
     );
     Ok(())
 }

@@ -71,17 +71,6 @@ uses AWS credentials configured separately.
 | Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` |
 | Amazon Bedrock (Claude) | Standard AWS credentials (profile / region); Bedrock API keys are not supported |
 
-### Telemetry
-
-Product analytics require an explicitly configured ingest endpoint. To disable
-product analytics even when an endpoint has been configured, set the following
-in `~/.forall/config.toml`.
-
-```toml
-[analytics]
-enabled = false
-```
-
 ## 2. MCP verify-only (Cursor / Claude Code / Codex)
 
 Do **not** install the Forall CLI. Use the npm bridge with your existing agent:

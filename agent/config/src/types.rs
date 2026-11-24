@@ -43,11 +43,6 @@ pub use crate::tui_keymap::TuiPagerKeymap;
 pub use crate::tui_keymap::TuiVimNormalKeymap;
 pub use crate::tui_keymap::TuiVimOperatorKeymap;
 
-pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
-/// Env var fallback when `[otel].endpoint` is unset.
-pub const DEFAULT_OTEL_ENDPOINT_ENV_VAR: &str = "FORALL_OTEL_ENDPOINT";
-/// Default env var read for the OTLP ingest Bearer token.
-pub const DEFAULT_OTEL_API_KEY_ENV_VAR: &str = "FORALL_OTEL_API_KEY";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 2;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 10;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
@@ -208,28 +203,6 @@ pub enum HistoryPersistence {
 }
 
 // ===== Analytics configuration =====
-
-/// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct AnalyticsConfigToml {
-    /// When `false`, disables analytics across Forall product surfaces in this profile.
-    /// Defaults to enabled (Codex-style). Opt out explicitly.
-    pub enabled: Option<bool>,
-    /// Product analytics ingest URL. Host-only values get `/v1/analytics/events` appended.
-    /// When unset, first-party builds use `https://telemetry.forall.astrio.app`.
-    pub endpoint: Option<String>,
-    /// Env var name for the telemetry ingest API key. Defaults to `FORALL_ANALYTICS_API_KEY`.
-    /// First-party release builds may also embed a write key at compile time.
-    pub api_key_env: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct FeedbackConfigToml {
-    /// When `false`, disables the feedback flow across Forall product surfaces.
-    pub enabled: Option<bool>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -503,110 +476,6 @@ pub struct AppsConfigToml {
 }
 
 // ===== OTEL configuration =====
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum OtelHttpProtocol {
-    /// Binary payload
-    Binary,
-    /// JSON payload
-    Json,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-pub struct OtelTlsConfig {
-    pub ca_certificate: Option<AbsolutePathBuf>,
-    pub client_certificate: Option<AbsolutePathBuf>,
-    pub client_private_key: Option<AbsolutePathBuf>,
-}
-
-/// Which OTEL exporter to use.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-pub enum OtelExporterKind {
-    None,
-    OtlpHttp {
-        endpoint: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-        protocol: OtelHttpProtocol,
-        #[serde(default)]
-        tls: Option<OtelTlsConfig>,
-    },
-    OtlpGrpc {
-        endpoint: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-        #[serde(default)]
-        tls: Option<OtelTlsConfig>,
-    },
-}
-
-/// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct OtelConfigToml {
-    /// Log user prompt in traces
-    pub log_user_prompt: Option<bool>,
-
-    /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
-    pub environment: Option<String>,
-
-    /// Base OTLP URL (host). Unset exporters default to OTLP/HTTP JSON on `/v1/{logs,traces,metrics}`.
-    pub endpoint: Option<String>,
-
-    /// Env var name for the OTLP ingest Bearer token. Defaults to `FORALL_OTEL_API_KEY`.
-    pub api_key_env: Option<String>,
-
-    /// Optional log exporter
-    pub exporter: Option<OtelExporterKind>,
-
-    /// Optional trace exporter
-    pub trace_exporter: Option<OtelExporterKind>,
-
-    /// Optional metrics exporter
-    pub metrics_exporter: Option<OtelExporterKind>,
-
-    /// Attributes to add to every exported trace span.
-    pub span_attributes: Option<BTreeMap<String, String>>,
-
-    /// Semicolon-separated `key:value` fields to upsert into W3C tracestate members.
-    pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
-}
-
-/// Effective OTEL settings after defaults are applied.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OtelConfig {
-    pub log_user_prompt: bool,
-    pub environment: String,
-    pub exporter: OtelExporterKind,
-    pub trace_exporter: OtelExporterKind,
-    pub metrics_exporter: OtelExporterKind,
-    /// `true` when `[otel].metrics_exporter` was set explicitly in config.
-    pub metrics_exporter_configured: bool,
-    pub api_key_env: Option<String>,
-    pub span_attributes: BTreeMap<String, String>,
-    pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
-}
-
-impl Default for OtelConfig {
-    fn default() -> Self {
-        OtelConfig {
-            log_user_prompt: false,
-            environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
-            exporter: OtelExporterKind::None,
-            trace_exporter: OtelExporterKind::None,
-            metrics_exporter: OtelExporterKind::None,
-            metrics_exporter_configured: false,
-            api_key_env: None,
-            span_attributes: BTreeMap::new(),
-            tracestate: BTreeMap::new(),
-        }
-    }
-}
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(untagged)]

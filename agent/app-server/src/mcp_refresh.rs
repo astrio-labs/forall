@@ -249,10 +249,9 @@ mod tests {
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),
                 Some(state_db.clone()),
-                "11111111-1111-4111-8111-111111111111".to_string(),
                 /*attestation_provider*/ None,
                 /*external_time_provider*/ None,
-        /*external_browser_opener*/ None,
+                /*external_browser_opener*/ None,
             )
         });
         thread_manager.start_thread(good_config).await?;

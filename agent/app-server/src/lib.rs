@@ -8,7 +8,6 @@ use forall_config::NoopThreadConfigLoader;
 use forall_config::RemoteThreadConfigLoader;
 use forall_config::ThreadConfigLoader;
 use forall_core::config::Config;
-use forall_core::resolve_installation_id;
 use forall_login::AuthManager;
 #[cfg(debug_assertions)]
 use forall_utils_absolute_path::AbsolutePathBuf;
@@ -21,8 +20,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::connection_cleanup::ConnectionCleanupTasks;
 use crate::message_processor::MessageProcessor;
@@ -43,6 +43,7 @@ use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use forall_analytics::AnalyticsEventsClient;
 use forall_analytics::AppServerRpcTransport;
 use forall_app_server_protocol::ConfigLayerSource;
 use forall_app_server_protocol::ConfigWarningNotification;
@@ -56,7 +57,6 @@ use forall_core::check_execpolicy_for_warnings;
 use forall_core::config::find_forall_home;
 use forall_exec_server::EnvironmentManager;
 use forall_exec_server::ExecServerRuntimePaths;
-use forall_feedback::ForallFeedback;
 use forall_protocol::protocol::SessionSource;
 use forall_rollout::state_db as rollout_state_db;
 use forall_state::log_db;
@@ -68,23 +68,20 @@ use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
-use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
-use tracing_subscriber::util::SubscriberInitExt;
 
 const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Forall rebuilt its local database.";
 
-mod analytics_utils;
 mod app_server_tracing;
 mod attestation;
 mod bespoke_event_handling;
+mod browser_open;
 mod command_exec;
 mod config;
 mod config_manager;
 mod config_manager_service;
 mod connection_cleanup;
 mod connection_rpc_gate;
-mod browser_open;
 mod current_time;
 mod dynamic_tools;
 mod error_code;
@@ -116,7 +113,7 @@ pub use crate::transport::auth::AppServerWebsocketAuthSettings;
 pub use crate::transport::auth::WebsocketAuthCliMode;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
-const OTEL_SERVICE_NAME: &str = "forall-app-server";
+
 #[cfg(debug_assertions)]
 const TEST_USER_CONFIG_FILE_ENV_VAR: &str = "CODEX_APP_SERVER_TEST_USER_CONFIG_FILE";
 
@@ -385,14 +382,12 @@ pub async fn run_main(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    default_metrics_enabled: bool,
 ) -> IoResult<()> {
     run_main_with_transport_options(
         arg0_paths,
         cli_config_overrides,
         loader_overrides,
         strict_config,
-        default_metrics_enabled,
         AppServerTransport::Stdio,
         SessionSource::VSCode,
         AppServerWebsocketAuthSettings::default(),
@@ -428,7 +423,6 @@ pub async fn run_main_with_transport_options(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     strict_config: bool,
-    default_metrics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
@@ -515,20 +509,6 @@ pub async fn run_main_with_transport_options(
         }
     };
 
-    let otel = forall_core::otel_init::build_provider(
-        &config,
-        env!("CARGO_PKG_VERSION"),
-        Some(OTEL_SERVICE_NAME),
-        default_metrics_enabled,
-    )
-    .map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("error loading otel config: {e}"),
-        )
-    })?;
-    forall_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
-    forall_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let unix_socket_startup_lock = match &transport {
         AppServerTransport::UnixSocket { socket_path } => {
             let startup_lock_path = app_server_startup_lock_path(&forall_home)?;
@@ -590,8 +570,6 @@ pub async fn run_main_with_transport_options(
         });
     }
 
-    let feedback = ForallFeedback::new();
-
     // Install a simple subscriber so `tracing` output is visible. Users can
     // control the log level with `RUST_LOG` and switch to JSON logs with
     // `LOG_FORMAT=json`.
@@ -609,21 +587,16 @@ pub async fn run_main_with_transport_options(
             .boxed(),
     };
 
-    let feedback_layer = feedback.logger_layer();
-    let feedback_metadata_layer = feedback.metadata_layer();
     let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(log_db::default_filter()));
-    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
-        .with(feedback_layer)
-        .with(feedback_metadata_layer)
         .with(log_db_layer)
-        .with(otel_logger_layer)
-        .with(otel_tracing_layer)
+        .with(tracing_subscriber::filter::filter_fn(
+            forall_core::util::local_log_metadata,
+        ))
         .try_init();
     for warning in &config_warnings {
         match &warning.details {
@@ -631,7 +604,6 @@ pub async fn run_main_with_transport_options(
             None => error!("{}", warning.summary),
         }
     }
-    let installation_id = resolve_installation_id(&config.forall_home).await?;
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
@@ -735,8 +707,7 @@ pub async fn run_main_with_transport_options(
 
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        let analytics_events_client = AnalyticsEventsClient::disabled();
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -749,13 +720,11 @@ pub async fn run_main_with_transport_options(
             config: Arc::new(config),
             config_manager,
             environment_manager,
-            feedback: feedback.clone(),
             log_db,
             state_db: state_db.clone(),
             config_warnings,
             session_source,
             auth_manager,
-            installation_id,
             rpc_transport: analytics_rpc_transport(&transport),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
         }));
@@ -1007,10 +976,6 @@ pub async fn run_main_with_transport_options(
     transport_shutdown_token.cancel();
     for handle in transport_accept_handles {
         let _ = handle.await;
-    }
-
-    if let Some(otel) = otel {
-        otel.shutdown();
     }
 
     Ok(())

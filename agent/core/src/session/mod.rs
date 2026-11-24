@@ -16,6 +16,7 @@ use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agents_md::LoadedAgentsMd;
 use crate::attestation::AttestationProvider;
+use crate::browser::BrowserOpener;
 use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
@@ -31,7 +32,6 @@ use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::RecommendedPluginsInstructions;
 use crate::context::world_state::WorldState;
-use crate::browser::BrowserOpener;
 use crate::current_time::TimeProvider;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::TurnEnvironmentSnapshot;
@@ -416,7 +416,6 @@ pub struct ForallSpawnOk {
 pub(crate) struct ForallSpawnArgs {
     pub(crate) config: Config,
     pub(crate) user_instructions: LoadedUserInstructions,
-    pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -506,7 +505,6 @@ impl Forall {
         let ForallSpawnArgs {
             mut config,
             user_instructions,
-            installation_id,
             auth_manager,
             models_manager,
             environment_manager,
@@ -664,7 +662,6 @@ impl Forall {
             session_configuration,
             config.clone(),
             user_instructions,
-            installation_id,
             auth_manager.clone(),
             models_manager.clone(),
             exec_policy,

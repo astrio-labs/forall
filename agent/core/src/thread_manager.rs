@@ -1,9 +1,9 @@
 use crate::SkillsService;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
+use crate::browser::BrowserOpener;
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
-use crate::browser::BrowserOpener;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
@@ -224,7 +224,6 @@ pub(crate) struct ThreadManagerState {
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     external_browser_opener: Option<Arc<dyn BrowserOpener>>,
     session_source: SessionSource,
-    installation_id: String,
     analytics_events_client: Option<AnalyticsEventsClient>,
     state_db: Option<StateDbHandle>,
     // Captures submitted ops for testing purpose when test mode is enabled.
@@ -275,7 +274,6 @@ impl ThreadManager {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         state_db: Option<StateDbHandle>,
-        installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
         external_browser_opener: Option<Arc<dyn BrowserOpener>>,
@@ -314,7 +312,6 @@ impl ThreadManager {
                 external_browser_opener,
                 auth_manager,
                 session_source,
-                installation_id,
                 analytics_events_client,
                 state_db,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -373,7 +370,6 @@ impl ThreadManager {
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
-        let installation_id = uuid::Uuid::new_v4().to_string();
         let skills_forall_home = match AbsolutePathBuf::from_absolute_path_checked(&forall_home) {
             Ok(forall_home) => forall_home,
             Err(err) => panic!("test forall_home should be absolute: {err}"),
@@ -423,7 +419,6 @@ impl ThreadManager {
                 external_browser_opener: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
-                installation_id,
                 analytics_events_client: None,
                 state_db,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -1509,7 +1504,6 @@ impl ThreadManagerState {
         } = Box::pin(Forall::spawn(ForallSpawnArgs {
             config,
             user_instructions,
-            installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager,
             environment_manager: Arc::clone(&self.environment_manager),

@@ -20,15 +20,6 @@ pub enum MetricsError {
     #[error("counter increment must be non-negative for {name}: {inc}")]
     NegativeCounterIncrement { name: String, inc: i64 },
 
-    #[error("failed to build OTLP metrics exporter")]
-    ExporterBuild {
-        #[source]
-        source: opentelemetry_otlp::ExporterBuildError,
-    },
-
-    #[error("invalid OTLP metrics configuration: {message}")]
-    InvalidConfig { message: String },
-
     #[error("failed to flush or shutdown metrics provider")]
     ProviderShutdown {
         #[source]

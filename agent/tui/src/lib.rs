@@ -46,7 +46,6 @@ use forall_config::format_config_error_with_source;
 use forall_exec_server::EnvironmentManager;
 use forall_exec_server::ExecServerRuntimePaths;
 use forall_login::AuthConfig;
-use forall_login::default_client::originator;
 use forall_login::default_client::set_default_client_residency_requirement;
 use forall_login::enforce_login_restrictions;
 use forall_model_provider_info::builtin_provider_profile_id;
@@ -1035,37 +1034,6 @@ pub async fn run_main(
 
     remove_legacy_tui_log_file(config.forall_home.as_path());
 
-    let otel_originator = originator().value;
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        forall_app_server_client::build_otel_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            /*default_metrics_enabled*/ true,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: {e}");
-            }
-            None
-        }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
-            None
-        }
-    };
-    if let Some(metrics) = otel.as_ref().and_then(forall_otel::OtelProvider::metrics) {
-        let _ = forall_otel::record_process_start_once(metrics, otel_originator.as_str());
-        let telemetry =
-            forall_rollout::sqlite_telemetry_recorder(metrics.clone(), otel_originator.as_str());
-        let _ = forall_state::install_process_db_telemetry(telemetry);
-    }
     let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
 
     let config_toml_log_dir_configured = config
@@ -1152,8 +1120,6 @@ pub async fn run_main(
     };
 
     let feedback = forall_feedback::ForallFeedback::new();
-    let feedback_layer = feedback.logger_layer();
-    let feedback_metadata_layer = feedback.metadata_layer();
 
     if cli.oss && model_provider_override.is_some() {
         // We're in the oss section, so provider_id should be Some
@@ -1170,10 +1136,6 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-
-    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
-
     let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
@@ -1181,11 +1143,10 @@ pub async fn run_main(
 
     let _ = tracing_subscriber::registry()
         .with(tui_file_layer)
-        .with(feedback_layer)
-        .with(feedback_metadata_layer)
         .with(log_db_layer)
-        .with(otel_logger_layer)
-        .with(otel_tracing_layer)
+        .with(tracing_subscriber::filter::filter_fn(
+            forall_app_server_client::local_log_metadata,
+        ))
         .try_init();
 
     run_ratatui_app(

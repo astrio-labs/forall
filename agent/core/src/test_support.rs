@@ -171,7 +171,6 @@ pub enum TestForallResponsesRequestKind {
 
 #[allow(clippy::too_many_arguments)]
 pub fn responses_metadata(
-    installation_id: &str,
     session_id: &str,
     thread_id: &str,
     turn_id: Option<&str>,
@@ -191,12 +190,7 @@ pub fn responses_metadata(
         parent_thread_id,
         subagent_header: subagent_header_value(session_source),
         subagent_kind: request_kind.and_then(|_| subagent_metadata_kind(session_source)),
-        ..ForallResponsesMetadata::new(
-            installation_id.to_string(),
-            session_id.to_string(),
-            thread_id.to_string(),
-            window_id,
-        )
+        ..ForallResponsesMetadata::new(session_id.to_string(), thread_id.to_string(), window_id)
     }
 }
 

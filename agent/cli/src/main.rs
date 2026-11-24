@@ -44,7 +44,7 @@ use std::sync::Arc;
 use supports_color::Stream;
 
 mod doctor;
-mod exec_server_telemetry;
+mod exec_server_logging;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod plugin_cmd;
@@ -527,24 +527,6 @@ struct AppServerCommand {
     #[arg(long = "stdio", conflicts_with = "listen")]
     stdio: bool,
 
-    /// Controls whether analytics are enabled by default.
-    ///
-    /// Analytics are disabled by default for app-server. Users have to explicitly opt in
-    /// via the `analytics` section in the config.toml file.
-    ///
-    /// However, for first-party use cases like the VSCode IDE extension, we default analytics
-    /// to be enabled by default by setting this flag. Users can still opt out by setting this
-    /// in their config.toml:
-    ///
-    /// ```toml
-    /// [analytics]
-    /// enabled = false
-    /// ```
-    ///
-    /// See https://github.com/astrio-labs/forall for analytics and metrics configuration.
-    #[arg(long = "analytics-default-enabled")]
-    analytics_default_enabled: bool,
-
     #[command(flatten)]
     auth: forall_app_server::AppServerWebsocketAuthArgs,
 }
@@ -1019,7 +1001,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 strict_config: app_server_strict_config,
                 listen,
                 stdio,
-                analytics_default_enabled,
                 auth,
             } = app_server_cli;
             let strict_config = app_server_strict_config || root_strict_config;
@@ -1042,7 +1023,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         root_config_overrides,
                         LoaderOverrides::default(),
                         strict_config,
-                        analytics_default_enabled,
                         transport,
                         forall_protocol::protocol::SessionSource::VSCode,
                         auth,
@@ -1551,9 +1531,7 @@ async fn run_exec_server_command(
             .environment_id
             .ok_or_else(|| anyhow::anyhow!("--environment-id is required when --remote is set"))?;
         let config = load_exec_server_config(root_config_overrides, strict_config).await?;
-        let _otel = exec_server_telemetry::init(Some(&config))
-            .inspect_err(|err| eprintln!("Could not create otel exporter: {err}"))
-            .ok();
+        exec_server_logging::init();
         let auth_provider = load_exec_server_remote_auth_provider(&config, &base_url).await?;
         let mut remote_config = forall_exec_server::RemoteEnvironmentConfig::new(
             base_url,
@@ -1566,15 +1544,10 @@ async fn run_exec_server_command(
         forall_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         Ok(())
     } else {
-        let config_result = load_exec_server_config(root_config_overrides, strict_config).await;
-        let config = if strict_config {
-            Some(config_result?)
-        } else {
-            config_result.ok()
-        };
-        let _otel = exec_server_telemetry::init(config.as_ref())
-            .inspect_err(|err| eprintln!("Could not create otel exporter: {err}"))
-            .ok();
+        if strict_config {
+            load_exec_server_config(root_config_overrides, strict_config).await?;
+        }
+        exec_server_logging::init();
         let listen_url = cmd
             .listen
             .as_deref()
@@ -3252,20 +3225,12 @@ mod tests {
     }
 
     #[test]
-    fn app_server_analytics_default_disabled_without_flag() {
+    fn app_server_uses_stdio_by_default() {
         let app_server = app_server_from_args(["forall", "app-server"].as_ref());
-        assert!(!app_server.analytics_default_enabled);
         assert_eq!(
             app_server.listen,
             forall_app_server::AppServerTransport::Stdio
         );
-    }
-
-    #[test]
-    fn app_server_analytics_default_enabled_with_flag() {
-        let app_server =
-            app_server_from_args(["forall", "app-server", "--analytics-default-enabled"].as_ref());
-        assert!(app_server.analytics_default_enabled);
     }
 
     #[test]

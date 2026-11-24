@@ -4,6 +4,8 @@ All notable changes to this public repository are documented here.
 
 ## Unreleased
 
+- Removed CLI analytics, telemetry exports, and feedback uploads. Model requests omit the installation ID and Git repository metadata.
+
 - `install.sh`, the README, the security policy, the issue template and the npm
   package now name this repository, `astrio-labs/forall-mcp`. Its old name,
   `astrio-labs/forall`, now belongs to another repository, so the redirect no

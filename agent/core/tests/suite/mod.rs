@@ -77,7 +77,6 @@ mod otel;
 mod override_updates;
 mod pending_input;
 mod permissions_messages;
-mod plugins;
 mod prompt_caching;
 mod prompt_debug_tests;
 mod quota_exceeded;

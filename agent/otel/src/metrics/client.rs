@@ -1,9 +1,6 @@
-use crate::config::OtelExporter;
-use crate::config::OtelHttpProtocol;
 use crate::metrics::MetricsError;
 use crate::metrics::Result;
 use crate::metrics::config::MetricsConfig;
-use crate::metrics::config::MetricsExporter;
 use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
@@ -16,13 +13,6 @@ use opentelemetry::metrics::Gauge;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider as _;
-use opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT;
-use opentelemetry_otlp::Protocol;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_otlp::WithHttpConfig;
-use opentelemetry_otlp::WithTonicConfig;
-use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
-use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::InstrumentKind;
 use opentelemetry_sdk::metrics::ManualReader;
@@ -39,7 +29,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
 use std::time::Duration;
-use tracing::debug;
 
 const ENV_ATTRIBUTE: &str = "env";
 const METER_NAME: &str = "forall";
@@ -244,7 +233,7 @@ impl MetricsClientInner {
     }
 
     fn shutdown(&self) -> Result<()> {
-        debug!("flushing OTEL metrics");
+        tracing::debug!("flushing OTEL metrics");
         self.meter_provider
             .force_flush()
             .map_err(|source| MetricsError::ProviderShutdown { source })?;
@@ -295,15 +284,8 @@ impl MetricsClient {
             )
         });
 
-        let (meter_provider, meter) = match exporter {
-            MetricsExporter::InMemory(exporter) => {
-                build_provider(resource, exporter, export_interval, runtime_reader.clone())
-            }
-            MetricsExporter::Otlp(exporter) => {
-                let exporter = build_otlp_metric_exporter(exporter, Temporality::Delta)?;
-                build_provider(resource, exporter, export_interval, runtime_reader.clone())
-            }
-        };
+        let (meter_provider, meter) =
+            build_provider(resource, exporter, export_interval, runtime_reader.clone());
 
         Ok(Self(std::sync::Arc::new(MetricsClientInner {
             meter_provider,
@@ -452,76 +434,4 @@ where
     let provider = provider_builder.with_reader(reader).build();
     let meter = provider.meter(METER_NAME);
     (provider, meter)
-}
-
-fn build_otlp_metric_exporter(
-    exporter: OtelExporter,
-    temporality: Temporality,
-) -> Result<opentelemetry_otlp::MetricExporter> {
-    match exporter {
-        OtelExporter::None => Err(MetricsError::ExporterDisabled),
-        OtelExporter::OtlpGrpc {
-            endpoint,
-            headers,
-            tls,
-        } => {
-            debug!("Using OTLP Grpc exporter for metrics: {endpoint}");
-
-            let header_map = crate::otlp::build_header_map(&headers);
-
-            let base_tls_config = ClientTlsConfig::new()
-                .with_enabled_roots()
-                .assume_http2(true);
-
-            let tls_config = match tls.as_ref() {
-                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)
-                    .map_err(|err| MetricsError::InvalidConfig {
-                        message: err.to_string(),
-                    })?,
-                None => base_tls_config,
-            };
-
-            opentelemetry_otlp::MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint)
-                .with_temporality(temporality)
-                .with_metadata(MetadataMap::from_headers(header_map))
-                .with_tls_config(tls_config)
-                .build()
-                .map_err(|source| MetricsError::ExporterBuild { source })
-        }
-        OtelExporter::OtlpHttp {
-            endpoint,
-            headers,
-            protocol,
-            tls,
-        } => {
-            debug!("Using OTLP Http exporter for metrics: {endpoint}");
-
-            let protocol = match protocol {
-                OtelHttpProtocol::Binary => Protocol::HttpBinary,
-                OtelHttpProtocol::Json => Protocol::HttpJson,
-            };
-
-            let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_endpoint(endpoint)
-                .with_temporality(temporality)
-                .with_protocol(protocol)
-                .with_headers(headers);
-
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
-                        .map_err(|err| MetricsError::InvalidConfig {
-                            message: err.to_string(),
-                        })?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
-
-            exporter_builder
-                .build()
-                .map_err(|source| MetricsError::ExporterBuild { source })
-        }
-    }
 }

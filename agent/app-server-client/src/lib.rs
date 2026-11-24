@@ -50,7 +50,6 @@ use forall_config::NoopThreadConfigLoader;
 use forall_config::RemoteThreadConfigLoader;
 use forall_config::ThreadConfigLoader;
 use forall_core::config::Config;
-pub use forall_core::otel_init::build_provider as build_otel_provider;
 pub use forall_exec_server::EnvironmentManager;
 pub use forall_exec_server::ExecServerRuntimePaths;
 use forall_feedback::ForallFeedback;
@@ -67,6 +66,8 @@ pub use crate::path::AppServerPath;
 pub use crate::remote::RemoteAppServerClient;
 pub use crate::remote::RemoteAppServerConnectArgs;
 pub use crate::remote::RemoteAppServerEndpoint;
+
+pub use forall_core::util::local_log_metadata;
 
 /// Transitional access to core-only embedded app-server types.
 ///

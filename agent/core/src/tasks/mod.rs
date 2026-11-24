@@ -573,9 +573,6 @@ impl Session {
                 (None, None)
             }
         };
-        turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
 
         let turn_state = {
             let mut active = self.active_turn.lock().await;
@@ -830,9 +827,6 @@ impl Session {
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
-        task.turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
         let session_task = task.task;
 
         select! {

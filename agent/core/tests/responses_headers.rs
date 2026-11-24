@@ -33,7 +33,6 @@ fn normalize_git_remote_url(url: &str) -> String {
         .to_string()
 }
 
-const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 fn test_turn_responses_metadata(
     _client: &ModelClient,
     thread_id: ThreadId,
@@ -41,7 +40,6 @@ fn test_turn_responses_metadata(
 ) -> forall_core::ForallResponsesMetadata {
     let thread_id = thread_id.to_string();
     test_responses_metadata(
-        TEST_INSTALLATION_ID,
         &thread_id,
         &thread_id,
         /*turn_id*/ None,
@@ -175,9 +173,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         Some(expected_window_id.as_str())
     );
     assert_eq!(request.header("x-forall-parent-thread-id"), None);
-    assert_eq!(
-        request.body_json()["client_metadata"]["x-forall-installation-id"].as_str(),
-        Some(TEST_INSTALLATION_ID)
+    assert!(
+        request.body_json()["client_metadata"]
+            .get("x-forall-installation-id")
+            .is_none()
     );
     assert_eq!(
         request.body_json()["client_metadata"]["x-forall-window-id"].as_str(),

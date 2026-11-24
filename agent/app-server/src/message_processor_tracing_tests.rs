@@ -257,13 +257,11 @@ async fn build_test_processor(
         config,
         config_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        feedback: ForallFeedback::new(),
         log_db: None,
         state_db: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         auth_manager,
-        installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         rpc_transport: AppServerRpcTransport::Stdio,
         plugin_startup_tasks: crate::PluginStartupTasks::Start,
     }));

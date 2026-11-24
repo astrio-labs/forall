@@ -382,11 +382,7 @@ fn assert_no_local_persistence_artifacts(forall_home: &Path) -> Result<()> {
     entries.remove("shell_snapshots");
     assert_eq!(
         entries,
-        BTreeSet::from([
-            "config.toml".to_string(),
-            "installation_id".to_string(),
-            "skills".to_string(),
-        ]),
+        BTreeSet::from(["config.toml".to_string(), "skills".to_string(),]),
         "non-local thread persistence should not create unexpected files in forall_home"
     );
 

@@ -48,11 +48,6 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::mount_analytics_capture;
-use super::analytics::thread_initialized_event;
-use super::analytics::wait_for_analytics_payload;
-
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
@@ -444,60 +439,6 @@ async fn thread_fork_can_exclude_turns_and_skip_restored_token_usage() -> Result
         "excludeTurns=true should not replay token usage"
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-
-    let forall_home = TempDir::new()?;
-    create_config_toml_with_backend_url(forall_home.path(), &server.uri(), &server.uri())?;
-    mount_analytics_capture(&server, forall_home.path()).await?;
-
-    let conversation_id = create_fake_rollout(
-        forall_home.path(),
-        "2025-01-05T12-00-00",
-        "2025-01-05T12:00:00Z",
-        "Saved user message",
-        Some("mock_provider"),
-        /*git_info*/ None,
-    )?;
-
-    let mut mcp = TestAppServer::new_without_managed_config(forall_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let fork_id = mcp
-        .send_thread_fork_request(ThreadForkParams {
-            thread_id: conversation_id,
-            thread_source: Some(ThreadSource::User),
-            ..Default::default()
-        })
-        .await?;
-    let fork_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
-    )
-    .await??;
-    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
-
-    let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
-    let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(
-        event,
-        &thread.id,
-        &thread.session_id,
-        "mock-model",
-        "forked",
-        "user",
-    );
-    assert_eq!(
-        event["event_params"]["forked_from_thread_id"],
-        thread
-            .forked_from_id
-            .as_deref()
-            .expect("forked thread has a source thread")
-    );
     Ok(())
 }
 

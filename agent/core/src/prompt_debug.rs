@@ -12,7 +12,6 @@ use forall_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::resolve_installation_id;
 use crate::session::session::Session;
 use crate::session::turn::build_prompt;
 use crate::session::turn::built_tools;
@@ -40,7 +39,6 @@ pub async fn build_prompt_input(
     )?;
 
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let installation_id = resolve_installation_id(&config.forall_home).await?;
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
@@ -58,7 +56,6 @@ pub async fn build_prompt_input(
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
-        installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,

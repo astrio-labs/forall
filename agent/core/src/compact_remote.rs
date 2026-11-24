@@ -233,7 +233,6 @@ async fn run_remote_compact_task_inner_impl(
     };
     let window_id = sess.current_window_id().await;
     let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
-        sess.installation_id.clone(),
         window_id,
         ForallResponsesRequestKind::Compaction(compaction_metadata),
     );

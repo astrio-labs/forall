@@ -4,7 +4,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config_toml::ToolsToml;
-use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::Personality;
 use crate::types::SessionPickerViewMode;
@@ -54,7 +53,10 @@ pub struct ConfigProfile {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub tools: Option<ToolsToml>,
     pub web_search: Option<WebSearchMode>,
-    pub analytics: Option<AnalyticsConfigToml>,
+    /// Ignored for compatibility with older configuration files.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub analytics: Option<serde_json::Value>,
     /// TUI settings scoped to this profile.
     #[serde(default)]
     pub tui: Option<ProfileTui>,

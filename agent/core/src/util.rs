@@ -118,3 +118,8 @@ pub fn normalize_thread_name(name: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "util_tests.rs"]
 mod tests;
+
+/// Keep local diagnostics free of product analytics and feedback event payloads.
+pub fn local_log_metadata(metadata: &tracing::Metadata<'_>) -> bool {
+    !metadata.target().starts_with("forall_otel") && metadata.target() != "feedback_tags"
+}
