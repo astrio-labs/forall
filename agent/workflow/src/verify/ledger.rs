@@ -420,7 +420,16 @@ pub fn merge_run(
         else {
             continue;
         };
-        // Carry forward obligations whose phase did not run this time.
+        // An entry has one baseline for all its obligations. Carry a skipped
+        // phase forward only if its evidence still belongs to that baseline.
+        if previous.requirement_sha256 != entry.requirement_sha256
+            || previous.code != entry.code
+            || previous.symbol_fingerprints != entry.symbol_fingerprints
+            || previous.file_sha256 != entry.file_sha256
+            || (entry.code.is_some() && entry.file_sha256.is_none())
+        {
+            continue;
+        }
         entry.obligations.extend(
             previous
                 .obligations
@@ -433,14 +442,6 @@ pub fn merge_run(
             .find(|req| req.id == entry.requirement_id)
         {
             entry.earned_level = earned_level_for(&entry.obligations, req);
-        }
-        // Fingerprints and the file hash come from the run that recorded
-        // them; a phase-scoped run does not re-anchor what it did not read.
-        if entry.symbol_fingerprints.is_empty() {
-            entry.symbol_fingerprints = previous.symbol_fingerprints.clone();
-        }
-        if entry.file_sha256.is_none() {
-            entry.file_sha256 = previous.file_sha256.clone();
         }
     }
     entries
@@ -813,8 +814,68 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_check_never_attaches_an_old_proof_to_a_new_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = "int f() { return 0; }";
+        fs::write(root.join("a.c"), source).unwrap();
+        let requirement = requirement("R", Some("a.c"), None, false);
+        let proved = build_ledger(
+            root,
+            None,
+            std::slice::from_ref(&requirement),
+            &[outcome("a.c", ObligationStatus::Proved)],
+        );
+        let check_property_only = |req: &Requirement| {
+            let requirements = std::slice::from_ref(req);
+            let current = build_ledger_with_properties(
+                root,
+                None,
+                requirements,
+                &[],
+                &[PropertyOutcome {
+                    requirement_id: req.id.clone(),
+                    file: "r.property.ts".to_string(),
+                    status: ObligationStatus::Proved,
+                    seed: 42,
+                    examples_run: 100,
+                }],
+            );
+            let merged = merge_run(
+                Some(proved.clone()),
+                current,
+                requirements,
+                false,
+                true,
+                false,
+            );
+            let entry = &merged.entries[0];
+            assert_eq!(entry.earned_level, EvidenceLevel::PropertyTested);
+            assert_eq!(entry.obligations.len(), 1);
+            assert_eq!(entry.obligations[0].kind, EvidenceKind::PropertyTest);
+            assert_eq!(summarize_earned(Some(&merged), 1).proved_requirements, 0);
+        };
+
+        let mut edited = requirement.clone();
+        edited.requirement = "a different guarantee".to_string();
+        check_property_only(&edited);
+
+        let mut remapped = requirement.clone();
+        fs::write(root.join("b.c"), source).unwrap();
+        remapped.code.as_mut().unwrap().file = "b.c".to_string();
+        check_property_only(&remapped);
+
+        fs::write(root.join("a.c"), "int f() { return 1; }").unwrap();
+        check_property_only(&requirement);
+        fs::remove_file(root.join("a.c")).unwrap();
+        check_property_only(&requirement);
+    }
+
+    #[test]
     fn a_property_only_run_keeps_the_proof_it_did_not_rerun() {
         let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/a.c"), "int f() { return 0; }").unwrap();
         let requirements = vec![requirement("BOTH-1", Some("src/a.c"), None, false)];
 
         // A full run proves the requirement.
@@ -1031,6 +1092,8 @@ mod tests {
     #[test]
     fn a_run_that_skips_scenarios_keeps_the_scenario_evidence_it_had() {
         let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/a.c"), "int f() { return 0; }").unwrap();
         let requirements = vec![requirement("S-2", Some("src/a.c"), None, false)];
         let full = build_ledger_with_evidence(
             dir.path(),

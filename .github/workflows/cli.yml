@@ -22,6 +22,8 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the Linux sandbox runtime
+        run: sudo apt-get install -y bubblewrap
       - name: Build the CLI from the locked workspace
         run: cargo build --locked -p forall-cli --bin forall
       - name: Check the source checkout's LemmaScript installation
@@ -40,6 +42,9 @@ jobs:
           "$cli" --version
           "$cli" init
           test -f .forall/markers.toml
+          "$cli" sandbox -- /bin/echo sandbox-ok
+      - name: Test the verification ledger and proof runner
+        run: cargo test --locked -p forall-workflow --lib verify::
       - name: Check passing and failing local properties
         run: cargo test --locked -p forall-workflow --test workflow_extensions python_property_
       - name: Exercise an editing turn with a local model fixture

@@ -5,8 +5,16 @@ Choose one path:
 ## 1. Forall CLI (full coding agent)
 
 Install Rust through rustup, Git, and a native C/C++ toolchain. On macOS, use
-the Xcode Command Line Tools. On Linux, install pkg-config and OpenSSL development
-headers. The `agent/` directory pins the Rust toolchain used for the CLI.
+the Xcode Command Line Tools. On Linux, the source build uses CMake, pkg-config
+and OpenSSL development headers. Sandboxed commands also need a system
+`bwrap` with `--perms` support and permission to create user namespaces. On
+Ubuntu or Debian, install the prerequisites with the following command.
+
+```bash
+sudo apt-get install build-essential cmake pkg-config libssl-dev bubblewrap
+```
+
+The `agent/` directory pins the Rust toolchain used for the CLI.
 
 ```bash
 git clone https://github.com/astrio-labs/forall.git
@@ -15,6 +23,9 @@ cargo build --locked -p forall-cli --bin forall
 export PATH="$PWD/target/debug:$PATH"
 forall --version
 ```
+
+On Linux, run `forall sandbox -- /bin/echo sandbox-ok` to check that the
+source-built CLI can launch a sandboxed command.
 
 Run these commands in the Git repository you want Forall to edit.
 

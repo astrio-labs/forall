@@ -35,8 +35,8 @@ pub fn requirements_for_check(
     let mapping = load_mapping(&path)?;
     let Some(change) = change else {
         // Project scope means "requirements under active verification". In a
-        // version-1 mapping the writable `verified` bool doubled as that
-        // marker; version 2 has no claims, so the marker is intent: any
+        // version-1 mapping the proof and property flags mark that intent.
+        // Version 2 has no claim flags, so the marker is any
         // machine-checkable artifact attached (scenarios, a property, a
         // contract). Without this, a migrated mapping would check nothing.
         let version = mapping.version;
@@ -47,7 +47,7 @@ pub fn requirements_for_check(
                 if version >= 2 {
                     claimed_evidence_level(r, version) >= EvidenceLevel::Tested
                 } else {
-                    r.verified
+                    r.verified || r.property_tested
                 }
             })
             .collect());

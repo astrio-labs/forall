@@ -51,6 +51,9 @@ produced, never by what was claimed.
 The terminal agent is derived from OpenAI Codex. It can edit your repository,
 author specs and contracts, and run local verification.
 
+On Linux, install the build dependencies and Bubblewrap for sandboxed commands
+before building. See the [platform prerequisites](docs/getting-started.md).
+
 ```bash
 git clone https://github.com/astrio-labs/forall.git
 cd forall/agent

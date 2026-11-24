@@ -322,28 +322,35 @@ requirements:
     )
     .unwrap();
 
-    assert_ne!(
-        run_check(CheckOptions {
+    // The same requirement must still run after its delta becomes part of
+    // the version-1 project mapping.
+    std::fs::copy(
+        change_dir(root, "add-clamp").join("mapping.delta.yaml"),
+        forall_workflow::paths::forall_mapping_path(root),
+    )
+    .unwrap();
+    for change in [Some("add-clamp"), None] {
+        let status = run_check(CheckOptions {
             root: Some(root),
-            change: Some("add-clamp"),
+            change,
             strict: false,
             json: false,
             quiet: true,
             pbt_seed: 99,
             pbt_examples: 10,
-        }),
-        0
-    );
+        });
+        assert_ne!(status, 0, "expected a failing check in scope {change:?}");
 
-    let report = read_verify_report(root, Some("add-clamp")).expect("report");
-    let issue = report
-        .issues
-        .iter()
-        .find(|i| i.phase == "property-tests" && i.severity == IssueSeverity::Critical)
-        .expect("property-tests CRITICAL");
-    assert!(issue.message.contains("PYTHON_PBT_FAILURE_MARKER"));
-    assert_eq!(issue.pbt.as_ref().map(|p| p.seed), Some(99));
-    assert!(issue.counterexample.is_some());
+        let report = read_verify_report(root, change).expect("report");
+        let issue = report
+            .issues
+            .iter()
+            .find(|i| i.phase == "property-tests" && i.severity == IssueSeverity::Critical)
+            .expect("property-tests CRITICAL");
+        assert!(issue.message.contains("PYTHON_PBT_FAILURE_MARKER"));
+        assert_eq!(issue.pbt.as_ref().map(|p| p.seed), Some(99));
+        assert!(issue.counterexample.is_some());
+    }
 }
 
 #[test]
@@ -483,6 +490,11 @@ fn run_property_runner_with_env(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     let mut command = std::process::Command::new(interpreter);
+    if interpreter == "python3" {
+        // The missing-library fixture must be independent of the developer's
+        // site packages. Tests may still supply their own fixture PYTHONPATH.
+        command.arg("-S").env_remove("PYTHONPATH");
+    }
     command.arg(&runner).arg(property_file).current_dir(cwd);
     for (key, value) in env {
         command.env(key, value);

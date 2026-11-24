@@ -12,11 +12,10 @@ outside the current working directory whenever it is available. If `bwrap` is
 present but too old to support
 `--argv0`, the helper keeps using system bubblewrap and switches to a
 no-`--argv0` compatibility path for the inner re-exec. If `bwrap` is missing,
-the helper falls back to the bundled `forall-resources/bwrap` binary shipped
-with Forall.
-Forall also surfaces a startup warning when `bwrap` is missing so users know it
-is falling back to the bundled helper. Forall surfaces the same startup warning
-path when bubblewrap cannot create user namespaces. WSL2 follows the normal
+the helper looks for a bundled `forall-resources/bwrap` binary. A Cargo
+source build requires a system Bubblewrap with `--perms` support.
+Forall warns at startup when `bwrap` is missing or when Bubblewrap cannot
+create user namespaces. WSL2 follows the normal
 Linux bubblewrap path. WSL1 is not supported for bubblewrap sandboxing because
 it cannot create the required user namespaces, so Forall rejects sandboxed shell
 commands that would enter the bubblewrap path.

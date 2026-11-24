@@ -27,6 +27,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-c = { workspace = true }
 tree-sitter-java = { workspace = true }
@@ -39,7 +40,6 @@ walkdir = { workspace = true, optional = true }
 
 [dev-dependencies]
 forall-utils-cargo-bin = { workspace = true }
-tempfile = { workspace = true }
 
 [features]
 default = []

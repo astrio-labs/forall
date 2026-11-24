@@ -15,8 +15,7 @@ use std::time::Instant;
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 const MISSING_BWRAP_WARNING: &str = concat!(
     "Forall could not find bubblewrap on PATH. ",
-    "Install bubblewrap with your OS package manager. ",
-    "Forall will use the bundled bubblewrap in the meantime.",
+    "Install bubblewrap with your OS package manager to run sandboxed commands.",
 );
 const USER_NAMESPACE_WARNING: &str =
     "Forall's Linux sandbox uses bubblewrap and needs access to create user namespaces.";
