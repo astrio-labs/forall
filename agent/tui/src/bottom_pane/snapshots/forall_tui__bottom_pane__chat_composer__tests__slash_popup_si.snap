@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 7954
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────╮"
+"│▌ /si                                                     │"
+"│                                                          │"
+"╰──────────────────────────────────────────────────────────╯"
+"  /side  start a side conversation in an ephemeral fork     "

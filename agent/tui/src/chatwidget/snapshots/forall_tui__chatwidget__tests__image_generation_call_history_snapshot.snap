@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 884
+expression: combined
+---
+• Generated Image:
+  └ A tiny blue square
+  └ Saved to: file:///tmp/ig-1.png

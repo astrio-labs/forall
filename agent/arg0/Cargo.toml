@@ -1,0 +1,32 @@
+[package]
+name = "forall-arg0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forall_arg0"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-apply-patch = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-install-context = { workspace = true }
+forall-linux-sandbox = { workspace = true }
+forall-sandboxing = { workspace = true }
+forall-shell-escalation = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-home-dir = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[target.'cfg(windows)'.dependencies]
+forall-windows-sandbox = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

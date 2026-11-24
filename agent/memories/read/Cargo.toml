@@ -1,0 +1,21 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-memories-read"
+version.workspace = true
+
+[lib]
+name = "forall_memories_read"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-protocol = { workspace = true }
+forall-shell-command = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

@@ -1,0 +1,4087 @@
+use core_test_support::PathBufExt;
+use core_test_support::TestForallResponsesRequestKind;
+use core_test_support::load_default_config_for_test;
+use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
+use core_test_support::responses::strip_metadata_from_json;
+use core_test_support::responses_metadata as test_responses_metadata;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_forall::TestForall;
+use core_test_support::test_forall::local_selections;
+use core_test_support::test_forall::test_forall;
+use core_test_support::wait_for_event;
+use dunce::canonicalize as normalize_path;
+use forall_config::ConfigLayerStack;
+use forall_config::types::AuthCredentialsStoreMode;
+use forall_core::ModelClient;
+use forall_core::NewThread;
+use forall_core::Prompt;
+use forall_core::ResponseEvent;
+use forall_core::ThreadManager;
+use forall_core::resolve_installation_id;
+use forall_core::thread_store_from_config;
+use forall_extension_api::empty_extension_registry;
+use forall_features::Feature;
+use forall_login::AuthKeyringBackendKind;
+use forall_login::AuthManager;
+use forall_login::ForallAuth;
+use forall_login::default_client::originator;
+use forall_model_provider_info::ModelProviderInfo;
+use forall_model_provider_info::WireApi;
+use forall_model_provider_info::built_in_model_providers;
+use forall_model_provider_info::create_oss_provider_with_base_url;
+use forall_models_manager::bundled_models_response;
+use forall_otel::SessionTelemetry;
+use forall_otel::TelemetryAuthMode;
+use forall_protocol::ThreadId;
+use forall_protocol::config_types::CollaborationMode;
+use forall_protocol::config_types::ModeKind;
+use forall_protocol::config_types::ModelProviderAuthInfo;
+use forall_protocol::config_types::ReasoningSummary;
+use forall_protocol::config_types::Settings;
+use forall_protocol::config_types::Verbosity;
+use forall_protocol::error::ForallErr;
+use forall_protocol::models::ContentItem;
+use forall_protocol::models::DEFAULT_IMAGE_DETAIL;
+use forall_protocol::models::FunctionCallOutputContentItem;
+use forall_protocol::models::FunctionCallOutputPayload;
+use forall_protocol::models::ImageDetail;
+use forall_protocol::models::LocalShellAction;
+use forall_protocol::models::LocalShellExecAction;
+use forall_protocol::models::LocalShellStatus;
+use forall_protocol::models::MessagePhase;
+use forall_protocol::models::ReasoningItemContent;
+use forall_protocol::models::ReasoningItemReasoningSummary;
+use forall_protocol::models::ResponseItem;
+use forall_protocol::models::WebSearchAction;
+use forall_protocol::openai_models::ModelInfo;
+use forall_protocol::openai_models::ReasoningEffort;
+use forall_protocol::protocol::EventMsg;
+use forall_protocol::protocol::Op;
+use forall_protocol::protocol::RolloutItem;
+use forall_protocol::protocol::RolloutLine;
+use forall_protocol::protocol::SessionMeta;
+use forall_protocol::protocol::SessionMetaLine;
+use forall_protocol::protocol::SessionSource;
+use forall_protocol::user_input::UserInput;
+use futures::StreamExt;
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::io::Write;
+use std::num::NonZeroU64;
+use std::sync::Arc;
+use tempfile::TempDir;
+use toml::toml;
+use uuid::Uuid;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header;
+use wiremock::matchers::header_regex;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
+
+const INSTALLATION_ID_FILENAME: &str = "installation_id";
+const TEST_WINDOW_ID: &str = "test-thread:0";
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+fn test_turn_responses_metadata(
+    _client: &ModelClient,
+    thread_id: ThreadId,
+) -> forall_core::ForallResponsesMetadata {
+    let thread_id = thread_id.to_string();
+    test_responses_metadata(
+        TEST_INSTALLATION_ID,
+        &thread_id,
+        &thread_id,
+        /*turn_id*/ None,
+        TEST_WINDOW_ID.to_string(),
+        &SessionSource::Exec,
+        /*parent_thread_id*/ None,
+        TestForallResponsesRequestKind::Turn,
+    )
+}
+
+#[expect(clippy::unwrap_used)]
+fn assert_message_role(request_body: &serde_json::Value, role: &str) {
+    assert_eq!(request_body["role"].as_str().unwrap(), role);
+}
+
+#[expect(clippy::unwrap_used)]
+fn message_input_texts(item: &serde_json::Value) -> Vec<&str> {
+    item["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
+        .collect()
+}
+
+fn message_input_text_contains(request: &ResponsesRequest, role: &str, needle: &str) -> bool {
+    request
+        .message_input_texts(role)
+        .iter()
+        .any(|text| text.contains(needle))
+}
+
+fn response_message_item_id(request: &ResponsesRequest, role: &str, text: &str) -> String {
+    request
+        .inputs_of_type("message")
+        .into_iter()
+        .find(|item| {
+            item.get("role").and_then(serde_json::Value::as_str) == Some(role)
+                && message_input_texts(item).contains(&text)
+        })
+        .and_then(|item| {
+            item.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("missing item ID for {role} message {text:?}"))
+}
+
+fn assert_forall_client_metadata(
+    request_body: &serde_json::Value,
+    installation_id: &str,
+    session_id: &str,
+    thread_id: &str,
+) {
+    let client_metadata = &request_body["client_metadata"];
+    assert_eq!(
+        client_metadata["x-forall-installation-id"].as_str(),
+        Some(installation_id)
+    );
+    assert_eq!(client_metadata["session_id"].as_str(), Some(session_id));
+    assert_eq!(client_metadata["thread_id"].as_str(), Some(thread_id));
+    let turn_metadata_str = client_metadata["x-forall-turn-metadata"]
+        .as_str()
+        .expect("missing x-forall-turn-metadata client metadata");
+    let turn_metadata = serde_json::from_str::<serde_json::Value>(turn_metadata_str)
+        .expect("invalid x-forall-turn-metadata json");
+    assert_eq!(
+        turn_metadata["installation_id"].as_str(),
+        Some(installation_id)
+    );
+    assert_eq!(turn_metadata["session_id"].as_str(), Some(session_id));
+    assert_eq!(turn_metadata["thread_id"].as_str(), Some(thread_id));
+    assert_eq!(
+        client_metadata["turn_id"].as_str(),
+        turn_metadata["turn_id"].as_str()
+    );
+    assert_eq!(
+        client_metadata["x-forall-window-id"].as_str(),
+        turn_metadata["window_id"].as_str()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_turns() {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp1"),
+                ev_assistant_message("msg-1", "first answer"),
+                ev_completed("resp1"),
+            ]),
+            sse(vec![ev_response_created("resp2"), ev_completed("resp2")]),
+        ],
+    )
+    .await;
+    let test = test_forall().build(&server).await.unwrap();
+
+    test.submit_turn("turn one").await.unwrap();
+    test.submit_turn("turn two").await.unwrap();
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let first = requests[0].body_json();
+    let second = requests[1].body_json();
+    let first_turn_id = first["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("first request should include turn id");
+    let second_turn_id = second["client_metadata"]["turn_id"]
+        .as_str()
+        .expect("second request should include turn id");
+    assert_ne!(first_turn_id, second_turn_id);
+
+    let first_input = first["input"].as_array().expect("first input");
+    let second_input = second["input"].as_array().expect("second input");
+    assert_eq!(&second_input[..first_input.len()], first_input.as_slice());
+    for item in first_input {
+        assert_eq!(
+            item["internal_chat_message_metadata_passthrough"]["turn_id"].as_str(),
+            Some(first_turn_id)
+        );
+    }
+
+    let item_turn_id = |text: &str| {
+        second_input
+            .iter()
+            .find(|item| {
+                item["content"].as_array().is_some_and(|content| {
+                    content
+                        .iter()
+                        .any(|content_item| content_item["text"].as_str() == Some(text))
+                })
+            })
+            .and_then(|item| item["internal_chat_message_metadata_passthrough"]["turn_id"].as_str())
+    };
+    assert_eq!(item_turn_id("turn one"), Some(first_turn_id));
+    assert_eq!(item_turn_id("first answer"), Some(first_turn_id));
+    assert_eq!(item_turn_id("turn two"), Some(second_turn_id));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_openai_responses_requests_omit_item_passthrough_metadata() {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let mut provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
+    provider.name = "Test Responses".to_string();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+    let codex = test_forall()
+        .with_config(move |config| {
+            config.model_provider_id = provider.name.clone();
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .unwrap()
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let body = response_mock.single_request().body_json();
+    let input = body["input"]
+        .as_array()
+        .expect("request should include input items");
+    assert!(!input.is_empty(), "request should include input items");
+    for item in input {
+        assert!(
+            item.get("internal_chat_message_metadata_passthrough")
+                .is_none(),
+            "input item should omit internal chat message metadata passthrough: {item}"
+        );
+        assert!(
+            item.get("id").is_none(),
+            "input item should omit generated IDs: {item}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_persist_across_resume_and_preserve_server_ids() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg_server", "first reply"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let mut builder = test_forall().with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let initial = builder.build(&server).await?;
+    let home = Arc::clone(&initial.home);
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial.submit_turn("before resume").await?;
+    initial.forall.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.forall, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    builder = builder.with_config(|config| {
+        let _ = config.features.enable(Feature::ItemIds);
+    });
+    let resumed = builder.resume(&server, home, rollout_path).await?;
+    resumed.submit_turn("after resume").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let user_id = response_message_item_id(&requests[0], "user", "before resume");
+    let user_uuid = user_id
+        .strip_prefix("msg_")
+        .expect("message ID should have the Responses API prefix");
+    assert_eq!(
+        Uuid::parse_str(user_uuid)?.get_version(),
+        Some(uuid::Version::SortRand)
+    );
+    assert_eq!(
+        response_message_item_id(&requests[1], "user", "before resume"),
+        user_id
+    );
+    assert_eq!(
+        response_message_item_id(&requests[1], "assistant", "first reply"),
+        "msg_server"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_item_ids_are_sent_for_all_remote_v2_compaction_requests() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
+                    }
+                }),
+                ev_completed("resp-compact"),
+            ]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        ],
+    )
+    .await;
+    let test = test_forall()
+        .with_auth(ForallAuth::create_dummy_api_key_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::ItemIds);
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn("before compaction").await?;
+    test.forall.submit(Op::Compact).await?;
+    wait_for_event(&test.forall, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after compaction").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for (request_index, request) in requests.iter().enumerate() {
+        let input = request.input();
+        assert!(!input.is_empty(), "request {request_index} input is empty");
+        for item in input {
+            if item.get("type").and_then(serde_json::Value::as_str) == Some("compaction_trigger") {
+                continue;
+            }
+            assert!(
+                item.get("id").and_then(serde_json::Value::as_str).is_some(),
+                "request {request_index} item should have an ID: {item:#?}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Writes an `auth.json` into the provided `forall_home` with the specified parameters.
+/// Returns the fake JWT string written to `tokens.id_token`.
+#[expect(clippy::unwrap_used)]
+fn write_auth_json(
+    forall_home: &TempDir,
+    openai_api_key: Option<&str>,
+    chatgpt_plan_type: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> String {
+    use base64::Engine as _;
+
+    let header = json!({ "alg": "none", "typ": "JWT" });
+    let payload = json!({
+        "email": "user@example.com",
+        "https://forall.astrio.app/auth": {
+            "chatgpt_plan_type": chatgpt_plan_type,
+            "chatgpt_account_id": account_id.unwrap_or("acc-123")
+        }
+    });
+
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let header_b64 = b64(&serde_json::to_vec(&header).unwrap());
+    let payload_b64 = b64(&serde_json::to_vec(&payload).unwrap());
+    let signature_b64 = b64(b"sig");
+    let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+    let mut tokens = json!({
+        "id_token": fake_jwt,
+        "access_token": access_token,
+        "refresh_token": "refresh-test",
+    });
+    if let Some(acc) = account_id {
+        tokens["account_id"] = json!(acc);
+    }
+
+    let auth_json = json!({
+        "OPENAI_API_KEY": openai_api_key,
+        "tokens": tokens,
+        // RFC3339 datetime; value doesn't matter for these tests
+        "last_refresh": chrono::Utc::now(),
+    });
+
+    std::fs::write(
+        forall_home.path().join("auth.json"),
+        serde_json::to_string_pretty(&auth_json).unwrap(),
+    )
+    .unwrap();
+
+    fake_jwt
+}
+
+struct ProviderAuthCommandFixture {
+    tempdir: TempDir,
+    command: String,
+    args: Vec<String>,
+}
+
+impl ProviderAuthCommandFixture {
+    fn new(tokens: &[&str]) -> std::io::Result<Self> {
+        let tempdir = tempfile::tempdir()?;
+        let tokens_file = tempdir.path().join("tokens.txt");
+        let mut token_file_contents = String::new();
+        for token in tokens {
+            token_file_contents.push_str(token);
+            token_file_contents.push('\n');
+        }
+        std::fs::write(&tokens_file, token_file_contents)?;
+
+        #[cfg(unix)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("print-token.sh");
+            std::fs::write(
+                &script_path,
+                r#"#!/bin/sh
+first_line=$(sed -n '1p' tokens.txt)
+printf '%s\n' "$first_line"
+tail -n +2 tokens.txt > tokens.next
+mv tokens.next tokens.txt
+"#,
+            )?;
+            let mut permissions = std::fs::metadata(&script_path)?.permissions();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(0o755);
+            }
+            std::fs::set_permissions(&script_path, permissions)?;
+            ("./print-token.sh".to_string(), Vec::new())
+        };
+
+        #[cfg(windows)]
+        let (command, args) = {
+            let script_path = tempdir.path().join("print-token.cmd");
+            std::fs::write(
+                &script_path,
+                r#"@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+
+set "first_line="
+<tokens.txt set /p first_line=
+if not defined first_line exit /b 1
+
+echo(%first_line%
+more +1 tokens.txt > tokens.next
+move /y tokens.next tokens.txt >nul
+"#,
+            )?;
+            (
+                "cmd.exe".to_string(),
+                vec![
+                    "/D".to_string(),
+                    "/Q".to_string(),
+                    "/C".to_string(),
+                    ".\\print-token.cmd".to_string(),
+                ],
+            )
+        };
+
+        Ok(Self {
+            tempdir,
+            command,
+            args,
+        })
+    }
+
+    fn auth(&self) -> ModelProviderAuthInfo {
+        ModelProviderAuthInfo {
+            command: self.command.clone(),
+            args: self.args.clone(),
+            // Match the model-provider default to avoid brittle shell-startup timing in CI.
+            timeout_ms: non_zero_u64(/*value*/ 5_000),
+            refresh_interval_ms: 60_000,
+            cwd: forall_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path())
+                .expect("tempdir should be absolute"),
+        }
+    }
+}
+
+fn non_zero_u64(value: u64) -> NonZeroU64 {
+    NonZeroU64::new(value).expect("expected non-zero value")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_includes_initial_messages_and_sends_prior_items() {
+    skip_if_no_network!();
+
+    // Create a fake rollout session file with prior user + system + assistant messages.
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir.path().join("resume-session.jsonl");
+    let mut f = std::fs::File::create(&session_path).unwrap();
+    let convo_id = Uuid::new_v4();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:00.000Z",
+            "type": "session_meta",
+            "payload": {
+                "session_id": convo_id,
+                "id": convo_id,
+                "timestamp": "2024-01-01T00:00:00Z",
+                "instructions": "be nice",
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "model_provider": "test-provider"
+            }
+        })
+    )
+    .unwrap();
+
+    // Prior item: user message (should be delivered)
+    let prior_user = forall_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![forall_protocol::models::ContentItem::InputText {
+            text: "resumed user message".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let prior_user_json = serde_json::to_value(&prior_user).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:01.000Z",
+            "type": "response_item",
+            "payload": prior_user_json
+        })
+    )
+    .unwrap();
+
+    // Prior item: system message (excluded from API history)
+    let prior_system = forall_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "system".to_string(),
+        content: vec![forall_protocol::models::ContentItem::OutputText {
+            text: "resumed system instruction".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let prior_system_json = serde_json::to_value(&prior_system).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:02.000Z",
+            "type": "response_item",
+            "payload": prior_system_json
+        })
+    )
+    .unwrap();
+
+    // Prior item: assistant message
+    let prior_item = forall_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![forall_protocol::models::ContentItem::OutputText {
+            text: "resumed assistant message".to_string(),
+        }],
+        phase: Some(MessagePhase::Commentary),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let prior_item_json = serde_json::to_value(&prior_item).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:03.000Z",
+            "type": "response_item",
+            "payload": prior_item_json
+        })
+    )
+    .unwrap();
+    drop(f);
+
+    // Mock server that will receive the resumed request
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    // Configure Forall to resume from our file
+    let forall_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_forall()
+        .with_home(forall_home.clone())
+        .with_pre_build_hook(|home| {
+            std::fs::write(home.join("AGENTS.md"), "be nice").expect("write global instructions");
+        });
+    let test = builder
+        .resume(&server, forall_home, session_path.clone())
+        .await
+        .expect("resume conversation");
+    let codex = test.forall.clone();
+    let session_configured = test.session_configured;
+
+    // 1) Assert initial_messages only includes existing EventMsg entries; response items are not converted
+    let initial_msgs = session_configured
+        .initial_messages
+        .clone()
+        .expect("expected initial messages option for resumed session");
+    let initial_json = serde_json::to_value(&initial_msgs).unwrap();
+    let expected_initial_json = json!([]);
+    assert_eq!(initial_json, expected_initial_json);
+
+    // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let input = request_body["input"].as_array().expect("input array");
+    let mut messages: Vec<(String, String)> = Vec::new();
+    for item in input {
+        let Some(role) = item.get("role").and_then(|role| role.as_str()) else {
+            continue;
+        };
+        for text in message_input_texts(item) {
+            messages.push((role.to_string(), text.to_string()));
+        }
+    }
+    let pos_prior_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "resumed user message")
+        .expect("prior user message");
+    let pos_prior_assistant = messages
+        .iter()
+        .position(|(role, text)| role == "assistant" && text == "resumed assistant message")
+        .expect("prior assistant message");
+    let prior_assistant = input
+        .iter()
+        .find(|item| {
+            item.get("role").and_then(|role| role.as_str()) == Some("assistant")
+                && item
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|content| content.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|text| text.as_str())
+                    == Some("resumed assistant message")
+        })
+        .expect("resumed assistant message request item");
+    assert_eq!(
+        prior_assistant
+            .get("phase")
+            .and_then(|phase| phase.as_str()),
+        Some("commentary")
+    );
+    let pos_permissions = messages
+        .iter()
+        .position(|(role, text)| role == "developer" && text.contains("<permissions instructions>"))
+        .expect("permissions message");
+    let pos_user_instructions = messages
+        .iter()
+        .position(|(role, text)| {
+            role == "user"
+                && text.contains("be nice")
+                && text.starts_with("# AGENTS.md instructions")
+        })
+        .expect("user instructions");
+    let pos_environment = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text.contains("<environment_context>"))
+        .expect("environment context");
+    let pos_new_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "hello")
+        .expect("new user message");
+
+    assert!(pos_prior_user < pos_prior_assistant);
+    assert!(pos_prior_assistant < pos_permissions);
+    assert!(pos_permissions < pos_user_instructions);
+    assert!(pos_user_instructions < pos_environment);
+    assert!(pos_environment < pos_new_user);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
+    skip_if_no_network!();
+
+    // Early js_repl builds persisted image tool results as two separate rollout items:
+    // a string-valued custom_tool_call_output plus a standalone user input_image message.
+    // Current image tests cover today's shapes; this keeps resume compatibility for that
+    // legacy rollout representation.
+    let legacy_custom_tool_call = ResponseItem::CustomToolCall {
+        id: None,
+        status: None,
+        call_id: "legacy-js-call".to_string(),
+        name: "js_repl".to_string(),
+        input: "console.log('legacy image flow')".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let legacy_image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let thread_id = ThreadId::default();
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    parent_thread_id: None,
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(legacy_custom_tool_call),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
+                call_id: "legacy-js-call".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:03.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputImage {
+                    image_url: legacy_image_url.to_string(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+    ];
+
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir
+        .path()
+        .join("resume-legacy-js-repl-image-rollout.jsonl");
+    let mut f = std::fs::File::create(&session_path).unwrap();
+    for line in rollout {
+        writeln!(f, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let forall_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_forall().with_model("gpt-5.4");
+    let test = builder
+        .resume(&server, forall_home, session_path.clone())
+        .await
+        .expect("resume conversation");
+    test.submit_turn("after resume").await.unwrap();
+
+    let input = resp_mock.single_request().input();
+
+    let legacy_output_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("custom_tool_call_output")
+                && item.get("call_id").and_then(|value| value.as_str()) == Some("legacy-js-call")
+        })
+        .expect("legacy custom tool output should be replayed");
+    assert_eq!(
+        input[legacy_output_index]
+            .get("output")
+            .and_then(|value| value.as_str()),
+        Some("legacy js_repl stdout")
+    );
+
+    let legacy_image_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item.get("role").and_then(|value| value.as_str()) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|content| {
+                        content.iter().any(|entry| {
+                            entry.get("type").and_then(|value| value.as_str())
+                                == Some("input_image")
+                                && entry.get("image_url").and_then(|value| value.as_str())
+                                    == Some(legacy_image_url)
+                        })
+                    })
+        })
+        .expect("legacy injected image message should be replayed");
+
+    let new_user_index = input
+        .iter()
+        .position(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item.get("role").and_then(|value| value.as_str()) == Some("user")
+                && item
+                    .get("content")
+                    .and_then(|value| value.as_array())
+                    .is_some_and(|content| {
+                        content.iter().any(|entry| {
+                            entry.get("type").and_then(|value| value.as_str()) == Some("input_text")
+                                && entry.get("text").and_then(|value| value.as_str())
+                                    == Some("after resume")
+                        })
+                    })
+        })
+        .expect("new user message should be present");
+
+    assert!(legacy_output_index < new_user_index);
+    assert!(legacy_image_index < new_user_index);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_replays_image_tool_outputs_with_detail() {
+    skip_if_no_network!();
+
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let function_call_id = "view-image-call";
+    let custom_call_id = "js-repl-call";
+    let thread_id = ThreadId::default();
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    session_id: thread_id.into(),
+                    id: thread_id,
+                    parent_thread_id: None,
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "view_image".to_string(),
+                namespace: None,
+                arguments: "{\"path\":\"/tmp/example.png\"}".to_string(),
+                call_id: function_call_id.to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.500Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: function_call_id.to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
+                id: None,
+                status: Some("completed".to_string()),
+                call_id: custom_call_id.to_string(),
+                name: "js_repl".to_string(),
+                input: "console.log('image flow')".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.500Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
+                call_id: custom_call_id.to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+                internal_chat_message_metadata_passthrough: None,
+            }),
+        },
+    ];
+
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir
+        .path()
+        .join("resume-image-tool-outputs-with-detail.jsonl");
+    let mut file = std::fs::File::create(&session_path).unwrap();
+    for line in rollout {
+        writeln!(file, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let forall_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_forall().with_model("gpt-5.4");
+    let test = builder
+        .resume(&server, forall_home, session_path.clone())
+        .await
+        .expect("resume conversation");
+    test.submit_turn("after resume").await.unwrap();
+
+    let function_output = resp_mock
+        .single_request()
+        .function_call_output(function_call_id);
+    assert_eq!(
+        function_output.get("output"),
+        Some(&serde_json::json!([
+            {
+                "type": "input_image",
+                "image_url": image_url,
+                "detail": "original"
+            }
+        ]))
+    );
+
+    let custom_output = resp_mock
+        .single_request()
+        .custom_tool_call_output(custom_call_id);
+    assert_eq!(
+        custom_output.get("output"),
+        Some(&serde_json::json!([
+            {
+                "type": "input_image",
+                "image_url": image_url,
+                "detail": "original"
+            }
+        ]))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn includes_session_id_thread_id_and_model_headers_in_request() {
+    skip_if_no_network!();
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_forall().with_auth(ForallAuth::from_api_key("Test API Key"));
+    let test = builder
+        .build(&server)
+        .await
+        .expect("create new conversation");
+    let codex = test.forall.clone();
+    let expected_session_id = test.session_configured.session_id;
+    let expected_thread_id = test.session_configured.thread_id;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+    let request_session_id = request.header("session-id").expect("session-id header");
+    let request_thread_id = request.header("thread-id").expect("thread-id header");
+    let request_authorization = request
+        .header("authorization")
+        .expect("authorization header");
+    let request_originator = request.header("originator").expect("originator header");
+    let request_body = request.body_json();
+    let installation_id =
+        std::fs::read_to_string(test.forall_home_path().join(INSTALLATION_ID_FILENAME))
+            .expect("read installation id");
+    let session_id_string = expected_session_id.to_string();
+    let thread_id_string = expected_thread_id.to_string();
+
+    assert_eq!(request_session_id, session_id_string.as_str());
+    assert_eq!(request_thread_id, thread_id_string.as_str());
+    assert_eq!(request_originator, originator().value);
+    assert_eq!(request_authorization, "Bearer Test API Key");
+    assert_eq!(
+        request_body["prompt_cache_key"].as_str(),
+        Some(thread_id_string.as_str())
+    );
+    assert_forall_client_metadata(
+        &request_body,
+        installation_id.as_str(),
+        session_id_string.as_str(),
+        thread_id_string.as_str(),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn provider_auth_command_supplies_bearer_token() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer command-token"),
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let auth_fixture = ProviderAuthCommandFixture::new(&["command-token"]).unwrap();
+
+    send_provider_auth_request(&server, auth_fixture.auth()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn provider_auth_command_refreshes_after_401() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let auth_fixture = ProviderAuthCommandFixture::new(&["first-token", "second-token"]).unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header_regex("Authorization", "Bearer first-token"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header_regex("Authorization", "Bearer second-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+                    "text/event-stream",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    send_provider_auth_request(&server, auth_fixture.auth()).await;
+}
+
+/// Issues one streamed Responses request through a provider configured with command-backed auth.
+///
+/// The caller owns the server-side assertions, so this helper only validates that the request
+/// reaches `Completed` without surfacing an auth or transport error to the client.
+#[expect(clippy::unwrap_used)]
+async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuthInfo) {
+    let provider = ModelProviderInfo {
+        name: "corp".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: Some(auth),
+        aws: None,
+        auth_header: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        requires_forall_auth: false,
+        supports_websockets: false,
+    };
+
+    let forall_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&forall_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort.clone();
+    let summary = config.model_reasoning_summary;
+    let model = forall_core::test_support::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+    let model_info =
+        forall_core::test_support::construct_model_info_offline(model.as_str(), &config);
+    let thread_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        Some(AuthManager::from_auth_for_testing(
+            ForallAuth::from_api_key("unused-api-key"),
+        )),
+        thread_id,
+        provider,
+        SessionSource::Exec,
+        config.model_verbosity,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*item_ids_enabled*/ config.features.enabled(Feature::ItemIds),
+        /*attestation_provider*/ None,
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            effort,
+            summary.unwrap_or(ReasoningSummary::Auto),
+            /*service_tier*/ None,
+            &responses_metadata,
+            &forall_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("responses stream to start");
+
+    while let Some(event) = stream.next().await {
+        if let Ok(ResponseEvent::Completed { .. }) = event {
+            break;
+        }
+    }
+}
+
+/// Minimal end-to-end Messages stream: an Anthropic-style SSE body is served
+/// from a mock `/v1/messages` endpoint and driven through
+/// `ModelClientSession::stream`, which dispatches on `WireApi::Messages` to
+/// `stream_messages_api`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn messages_wire_api_streams_completed_turn() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let events = [
+        json!({
+            "type": "message_start",
+            "message": {"id": "msg_1", "usage": {"input_tokens": 10}}
+        }),
+        json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""}
+        }),
+        json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2}
+        }),
+        json!({"type": "message_stop"}),
+    ];
+    let sse_body: String = events
+        .iter()
+        .map(|event| {
+            format!(
+                "event: {}\ndata: {event}\n\n",
+                event["type"].as_str().unwrap_or_default()
+            )
+        })
+        .collect();
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse_body, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider =
+        create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Messages);
+    let model_info: ModelInfo = serde_json::from_value(json!({
+        "slug": "claude-test",
+        "display_name": "claude-test",
+        "description": "desc",
+        "default_reasoning_level": null,
+        "supported_reasoning_levels": [],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 1,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "model_messages": null,
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 200000,
+        "auto_compact_token_limit": null,
+        "experimental_supported_tools": []
+    }))
+    .expect("deserialize test model info");
+    let thread_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        "claude-test",
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        thread_id,
+        provider,
+        SessionSource::Exec,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
+        /*attestation_provider*/ None,
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::Auto,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &forall_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("messages stream should start");
+
+    let mut saw_text_item = false;
+    let mut completed = None;
+    while let Some(event) = stream.next().await {
+        match event.expect("stream event") {
+            ResponseEvent::OutputItemDone(ResponseItem::Message { role, content, .. }) => {
+                assert_eq!(role, "assistant");
+                assert_eq!(
+                    content,
+                    vec![ContentItem::OutputText {
+                        text: "Hello".to_string(),
+                    }]
+                );
+                saw_text_item = true;
+            }
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+                end_turn,
+            } => {
+                completed = Some((response_id, token_usage, end_turn));
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_text_item, "expected the assistant text item");
+    let (response_id, token_usage, end_turn) = completed.expect("stream should complete");
+    assert_eq!(response_id, "msg_1");
+    assert_eq!(end_turn, Some(true));
+    let usage = token_usage.expect("usage should be assembled");
+    assert_eq!(usage.input_tokens, 10);
+    assert_eq!(usage.output_tokens, 2);
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("anthropic-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("2023-06-01")
+    );
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("request body should be JSON");
+    assert_eq!(body["model"].as_str(), Some("claude-test"));
+    assert_eq!(body["max_tokens"].as_i64(), Some(32_000));
+    assert_eq!(body["stream"].as_bool(), Some(true));
+    assert_eq!(body["messages"][0]["role"].as_str(), Some("user"));
+    assert_eq!(
+        body["system"][0]["cache_control"]["type"].as_str(),
+        Some("ephemeral")
+    );
+    // Responses-only params must not leak onto the Messages wire.
+    for absent in [
+        "prompt_cache_key",
+        "store",
+        "include",
+        "service_tier",
+        "text",
+    ] {
+        assert!(
+            body.get(absent).is_none(),
+            "unexpected Responses-only param `{absent}` in Messages body"
+        );
+    }
+}
+
+/// Minimal end-to-end Gemini stream: a native `streamGenerateContent` SSE body
+/// is served from a mock model-scoped endpoint and driven through
+/// `ModelClientSession::stream`, which dispatches on `WireApi::Gemini` to
+/// `stream_gemini_api`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gemini_wire_api_streams_completed_turn() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    // Gemini emits data-only SSE frames carrying whole `GenerateContentResponse`
+    // chunks; the terminal signal is `finishReason`, not a dedicated event.
+    let chunks = [
+        json!({
+            "responseId": "resp_1",
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hello"}]}
+            }],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}
+        }),
+        json!({
+            "responseId": "resp_1",
+            "candidates": [{
+                "content": {"role": "model", "parts": []},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 12
+            }
+        }),
+    ];
+    let sse_body: String = chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .collect();
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/gemini-test:streamGenerateContent"))
+        // Without `alt=sse` the endpoint returns a chunked JSON array instead of
+        // an event stream, so the query parameter is part of the contract.
+        .and(query_param("alt", "sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse_body, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider =
+        create_oss_provider_with_base_url(&format!("{}/v1beta", server.uri()), WireApi::Gemini);
+    let model_info: ModelInfo = serde_json::from_value(json!({
+        "slug": "gemini-test",
+        "display_name": "gemini-test",
+        "description": "desc",
+        "default_reasoning_level": null,
+        "supported_reasoning_levels": [],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 1,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "model_messages": null,
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 1048576,
+        "auto_compact_token_limit": null,
+        "experimental_supported_tools": []
+    }))
+    .expect("deserialize test model info");
+    let thread_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        "gemini-test",
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        thread_id,
+        provider,
+        SessionSource::Exec,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
+        /*attestation_provider*/ None,
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::Auto,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &forall_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("gemini stream should start");
+
+    let mut saw_text_item = false;
+    let mut completed = None;
+    while let Some(event) = stream.next().await {
+        match event.expect("stream event") {
+            ResponseEvent::OutputItemDone(ResponseItem::Message { role, content, .. }) => {
+                assert_eq!(role, "assistant");
+                assert_eq!(
+                    content,
+                    vec![ContentItem::OutputText {
+                        text: "Hello".to_string(),
+                    }]
+                );
+                saw_text_item = true;
+            }
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+                end_turn,
+            } => {
+                completed = Some((response_id, token_usage, end_turn));
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_text_item, "expected the assistant text item");
+    let (response_id, token_usage, end_turn) = completed.expect("stream should complete");
+    assert_eq!(response_id, "resp_1");
+    assert_eq!(end_turn, Some(true));
+    let usage = token_usage.expect("usage should be assembled");
+    assert_eq!(usage.input_tokens, 10);
+    assert_eq!(usage.output_tokens, 2);
+    assert_eq!(usage.total_tokens, 12);
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("request body should be JSON");
+    // The model slug lives in the path, never in the body.
+    assert!(
+        body.get("model").is_none(),
+        "model must not be a body field"
+    );
+    assert_eq!(
+        body["generationConfig"]["maxOutputTokens"].as_i64(),
+        Some(32_768)
+    );
+    assert_eq!(body["contents"][0]["role"].as_str(), Some("user"));
+    assert_eq!(
+        body["contents"][0]["parts"][0]["text"].as_str(),
+        Some("hello")
+    );
+    // `systemInstruction` carries `prompt.base_instructions`, delivered as a
+    // role-less `Content` rather than a `messages`-style system block.
+    assert!(
+        body["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
+        "systemInstruction should carry the base instructions"
+    );
+    // Responses-only and Messages-only params must not leak onto the Gemini wire.
+    for absent in [
+        "prompt_cache_key",
+        "store",
+        "include",
+        "service_tier",
+        "text",
+        "stream",
+        "max_tokens",
+        "messages",
+        "system",
+    ] {
+        assert!(
+            body.get(absent).is_none(),
+            "unexpected foreign param `{absent}` in Gemini body"
+        );
+    }
+}
+
+/// Reflected IEEE CRC32, written independently of `forall-api`'s decoder.
+///
+/// The decoder validates frames with `crc32fast`; computing the test's CRCs from
+/// a second implementation means a passing test is agreement between two
+/// implementations rather than a decoder agreeing with itself.
+fn test_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = if crc & 1 == 1 { 0xEDB8_8320 } else { 0 };
+            crc = (crc >> 1) ^ mask;
+        }
+    }
+    !crc
+}
+
+/// Encodes one event-stream string header: `len | name | 7 | len | value`.
+fn test_event_stream_string_header(name: &str, value: &str) -> Vec<u8> {
+    let mut out = vec![u8::try_from(name.len()).expect("header name fits in a byte")];
+    out.extend_from_slice(name.as_bytes());
+    out.push(7);
+    out.extend_from_slice(
+        &u16::try_from(value.len())
+            .expect("value fits in u16")
+            .to_be_bytes(),
+    );
+    out.extend_from_slice(value.as_bytes());
+    out
+}
+
+/// Builds one `application/vnd.amazon.eventstream` frame around a Bedrock chunk
+/// envelope: prelude (total length, headers length, prelude CRC), headers,
+/// payload, then the message CRC.
+fn test_bedrock_chunk_frame(chunk: &serde_json::Value) -> Vec<u8> {
+    use base64::Engine;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(chunk.to_string());
+    let payload = json!({"bytes": encoded, "p": "abcdefgh"}).to_string();
+    let payload = payload.as_bytes();
+
+    let mut headers = test_event_stream_string_header(":event-type", "chunk");
+    headers.extend_from_slice(&test_event_stream_string_header(":message-type", "event"));
+    headers.extend_from_slice(&test_event_stream_string_header(
+        ":content-type",
+        "application/json",
+    ));
+
+    let total_length = 12 + headers.len() + payload.len() + 4;
+    let mut frame = Vec::with_capacity(total_length);
+    frame.extend_from_slice(
+        &u32::try_from(total_length)
+            .expect("frame fits")
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(
+        &u32::try_from(headers.len())
+            .expect("headers fit")
+            .to_be_bytes(),
+    );
+    frame.extend_from_slice(&test_crc32(&frame[..8]).to_be_bytes());
+    frame.extend_from_slice(&headers);
+    frame.extend_from_slice(payload);
+    frame.extend_from_slice(&test_crc32(&frame).to_be_bytes());
+    frame
+}
+
+/// Minimal end-to-end Claude-on-Bedrock stream: binary event-stream frames are
+/// served from a mock model-scoped invoke endpoint and driven through
+/// `ModelClientSession::stream`, which dispatches on `WireApi::BedrockMessages`
+/// to `stream_bedrock_messages_api`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bedrock_messages_wire_api_streams_completed_turn() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    // Byte-identical to the chunks the direct Anthropic SSE endpoint sends; only
+    // the framing differs.
+    let chunks = [
+        json!({
+            "type": "message_start",
+            "message": {"id": "msg_bedrock", "usage": {"input_tokens": 10}}
+        }),
+        json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""}
+        }),
+        json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2}
+        }),
+        json!({"type": "message_stop"}),
+    ];
+    let mut body = Vec::new();
+    for chunk in &chunks {
+        body.extend_from_slice(&test_bedrock_chunk_frame(chunk));
+    }
+
+    Mock::given(method("POST"))
+        // The model id is URL-path scoped; `.` and `-` need no escaping.
+        .and(path(
+            "/model/anthropic.claude-test/invoke-with-response-stream",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/vnd.amazon.eventstream")
+                .insert_header("x-amzn-requestid", "req-bedrock-1")
+                .set_body_raw(body, "application/vnd.amazon.eventstream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // `bedrock-runtime` has no path prefix on its base URL: the endpoint's paths
+    // are model-scoped and carry no API version segment.
+    let provider = create_oss_provider_with_base_url(&server.uri(), WireApi::BedrockMessages);
+    let model_info: ModelInfo = serde_json::from_value(json!({
+        "slug": "anthropic.claude-test",
+        "display_name": "anthropic.claude-test",
+        "description": "desc",
+        "default_reasoning_level": null,
+        "supported_reasoning_levels": [],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 1,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "model_messages": null,
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 200000,
+        "auto_compact_token_limit": null,
+        "experimental_supported_tools": []
+    }))
+    .expect("deserialize test model info");
+    let thread_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        "anthropic.claude-test",
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        thread_id,
+        provider,
+        SessionSource::Exec,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
+        /*attestation_provider*/ None,
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None,
+            ReasoningSummary::Auto,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &forall_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("bedrock messages stream should start");
+
+    let mut saw_text_item = false;
+    let mut completed = None;
+    while let Some(event) = stream.next().await {
+        match event.expect("stream event") {
+            ResponseEvent::OutputItemDone(ResponseItem::Message { role, content, .. }) => {
+                assert_eq!(role, "assistant");
+                assert_eq!(
+                    content,
+                    vec![ContentItem::OutputText {
+                        text: "Hello".to_string(),
+                    }]
+                );
+                saw_text_item = true;
+            }
+            ResponseEvent::Completed {
+                response_id,
+                token_usage,
+                end_turn,
+            } => {
+                completed = Some((response_id, token_usage, end_turn));
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_text_item, "expected the assistant text item");
+    let (response_id, token_usage, end_turn) = completed.expect("stream should complete");
+    assert_eq!(response_id, "msg_bedrock");
+    assert_eq!(end_turn, Some(true));
+    let usage = token_usage.expect("usage should be assembled");
+    assert_eq!(usage.input_tokens, 10);
+    assert_eq!(usage.output_tokens, 2);
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    // Bedrock has no `anthropic-version` header; the version is a body field.
+    assert!(
+        requests[0].headers.get("anthropic-version").is_none(),
+        "the anthropic-version header must not be sent to Bedrock"
+    );
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("request body should be JSON");
+    assert_eq!(
+        body["anthropic_version"].as_str(),
+        Some("bedrock-2023-05-31")
+    );
+    // Same builder as the direct-Anthropic path, so the shared fields match
+    // `messages_wire_api_streams_completed_turn`.
+    assert_eq!(body["max_tokens"].as_i64(), Some(32_000));
+    assert_eq!(body["messages"][0]["role"].as_str(), Some("user"));
+    assert_eq!(
+        body["system"][0]["cache_control"]["type"].as_str(),
+        Some("ephemeral")
+    );
+    // `model` is URL-path scoped and `stream` is implied by the operation;
+    // Bedrock's model-body schema rejects both as extraneous keys.
+    for absent in [
+        "model",
+        "stream",
+        "prompt_cache_key",
+        "store",
+        "include",
+        "service_tier",
+        "text",
+    ] {
+        assert!(
+            body.get(absent).is_none(),
+            "unexpected param `{absent}` in the Bedrock invoke body"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_base_instructions_override_in_request() {
+    skip_if_no_network!();
+    // Mock server
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_forall()
+        .with_auth(ForallAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.base_instructions = Some("test instructions".to_string());
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("test instructions")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn chatgpt_auth_sends_correct_request() {
+    skip_if_no_network!();
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut model_provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
+    model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
+    model_provider.supports_websockets = false;
+    let mut builder = test_forall()
+        .with_auth(create_dummy_forall_auth())
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+        });
+    let test = builder
+        .build(&server)
+        .await
+        .expect("create new conversation");
+    let codex = test.forall.clone();
+    let expected_session_id = test.session_configured.session_id;
+    let expected_thread_id = test.session_configured.thread_id;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/api/codex/responses");
+    let request_authorization = request
+        .header("authorization")
+        .expect("authorization header");
+    let request_originator = request.header("originator").expect("originator header");
+    let request_chatgpt_account_id = request
+        .header("chatgpt-account-id")
+        .expect("chatgpt-account-id header");
+    let request_body = request.body_json();
+
+    let request_session_id = request.header("session-id").expect("session-id header");
+    let request_thread_id = request.header("thread-id").expect("thread-id header");
+    let installation_id =
+        std::fs::read_to_string(test.forall_home_path().join(INSTALLATION_ID_FILENAME))
+            .expect("read installation id");
+    let session_id_string = expected_session_id.to_string();
+    let thread_id_string = expected_thread_id.to_string();
+    assert_eq!(request_session_id, session_id_string.as_str());
+    assert_eq!(request_thread_id, thread_id_string.as_str());
+
+    assert_eq!(request_originator, originator().value);
+    assert_eq!(request_authorization, "Bearer Access Token");
+    assert_eq!(request_chatgpt_account_id, "account_id");
+    assert_forall_client_metadata(
+        &request_body,
+        installation_id.as_str(),
+        session_id_string.as_str(),
+        thread_id_string.as_str(),
+    );
+    assert!(request_body["stream"].as_bool().unwrap());
+    assert_eq!(
+        request_body["include"][0].as_str().unwrap(),
+        "reasoning.encrypted_content"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
+    skip_if_no_network!();
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            "text/event-stream",
+        );
+
+    // Expect API key header, no ChatGPT account header required.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header_regex("Authorization", r"Bearer sk-test-key"))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        supports_websockets: false,
+        ..built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone()
+    };
+
+    // Init session
+    let forall_home = TempDir::new().unwrap();
+    // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT,
+    // but config will force API key preference.
+    let _jwt = write_auth_json(
+        &forall_home,
+        Some("sk-test-key"),
+        "pro",
+        "Access-123",
+        Some("acc-123"),
+    );
+
+    let mut config = load_default_config_for_test(&forall_home).await;
+    config.model_provider = model_provider;
+
+    let auth = ForallAuth::from_auth_storage(
+        forall_home.path(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+        /*auth_route_config*/ None,
+    )
+    .await
+    .expect("Failed to load ForallAuth")
+    .expect("No ForallAuth found in forall_home");
+    let auth_manager = forall_core::test_support::auth_manager_from_auth(auth);
+    let installation_id = resolve_installation_id(&config.forall_home)
+        .await
+        .expect("resolve installation id");
+    let thread_manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        Arc::new(forall_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(forall_core::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        /*state_db*/ None,
+        installation_id,
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+        /*external_browser_opener*/ None,
+    );
+    let NewThread { thread: codex, .. } = thread_manager
+        .start_thread(config.clone())
+        .await
+        .expect("create new conversation");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_user_instructions_message_in_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_forall()
+        .with_auth(ForallAuth::from_api_key("Test API Key"))
+        .with_pre_build_hook(|home| {
+            std::fs::write(home.join("AGENTS.md"), "be nice").expect("write global instructions");
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        !request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("be nice")
+    );
+    assert_message_role(&request_body["input"][0], "developer");
+    let permissions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid permissions message content");
+    assert!(
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+    );
+
+    assert_message_role(&request_body["input"][1], "user");
+    let user_context_texts = message_input_texts(&request_body["input"][1]);
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("# AGENTS.md instructions")),
+        "expected AGENTS text in contextual user message, got {user_context_texts:?}"
+    );
+    let ui_text = user_context_texts
+        .iter()
+        .copied()
+        .find(|text| text.contains("<INSTRUCTIONS>"))
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("<environment_context>")
+                && text.ends_with("</environment_context>")),
+        "expected environment context in contextual user message, got {user_context_texts:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn omits_environment_context_when_configured_off() {
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_forall().with_config(|config| {
+        config.include_environment_context = false;
+    });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    assert!(
+        !message_input_text_contains(&request, "user", "<environment_context>"),
+        "did not expect environment context when include_environment_context = false, got {:?}",
+        request.body_json()["input"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_append_to_developer_message() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let forall_home = Arc::new(TempDir::new().unwrap());
+    let skill_dir = forall_home.path().join("skills/demo");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: build charts\n---\n\n# body\n",
+    )
+    .expect("write skill");
+
+    let forall_home_path = forall_home.path().to_path_buf();
+    let mut builder = test_forall()
+        .with_home(forall_home.clone())
+        .with_auth(ForallAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.cwd = forall_home_path.abs();
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    let developer_text = developer_messages.join("\n\n");
+    assert!(
+        developer_text.contains("## Skills"),
+        "expected skills section present: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains("demo: build charts"),
+        "expected skill summary: {developer_messages:?}"
+    );
+    let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
+    let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
+    assert!(
+        developer_text.contains(&expected_path_str),
+        "expected path {expected_path_str} in developer message: {developer_messages:?}"
+    );
+    let _forall_home_guard = forall_home;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_use_aliases_in_developer_message_under_budget_pressure() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let forall_home_parent = TempDir::new().unwrap();
+    let long_home_parent = forall_home_parent
+        .path()
+        .join("forall-home-with-long-shared-prefix-for-skill-alias-budget-test");
+    std::fs::create_dir_all(&long_home_parent).expect("create long home parent");
+    let forall_home = Arc::new(TempDir::new_in(long_home_parent).unwrap());
+    let skill_root = forall_home.path().join("skills");
+    for index in 0..12 {
+        let skill_dir = skill_root.join(format!("s{index:02}"));
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: s{index:02}\ndescription: d\n---\n\n# body\n"),
+        )
+        .expect("write skill");
+    }
+
+    let forall_home_path = forall_home.path().to_path_buf();
+    let mut builder = test_forall()
+        .with_home(forall_home.clone())
+        .with_auth(ForallAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.cwd = forall_home_path.abs();
+            let user_config_path = forall_home_path.join("config.toml").abs();
+            config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+                &user_config_path,
+                toml! { skills = { bundled = { enabled = false } } }.into(),
+            );
+            config.model_context_window = Some(12_000);
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    let developer_text = developer_messages.join("\n\n");
+    let expected_root = normalize_path(skill_root).unwrap();
+    let expected_root_str = expected_root.to_string_lossy().replace('\\', "/");
+    assert!(
+        developer_text.contains("### Skill roots"),
+        "expected aliased skills root section: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains(&format!("- `r0` = `{expected_root_str}`")),
+        "expected root alias for {expected_root_str}: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains("- s00: d (file: r0/s00/SKILL.md)"),
+        "expected skill path to use root alias: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains(
+            "expand the listed short `path` with the matching alias from `### Skill roots`"
+        ),
+        "expected alias-specific skill instructions: {developer_messages:?}"
+    );
+    let _forall_home_guard = forall_home;
+    let _forall_home_parent_guard = forall_home_parent;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_no_effort_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } =
+        test_forall().with_model("gpt-5.4").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } =
+        test_forall().with_model("gpt-5.4").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall {
+        forall: codex,
+        config,
+        ..
+    } = test_forall().with_model("gpt-5.4").build(&server).await?;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: forall_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(config.cwd.clone())),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                summary: Some(
+                    config
+                        .model_reasoning_summary
+                        .unwrap_or(ReasoningSummary::Auto),
+                ),
+                collaboration_mode: Some(collaboration_mode),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    assert_eq!(request_body["model"].as_str(), Some("gpt-5.4"));
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("high")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::Concise);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary"))
+            .and_then(|value| value.as_str()),
+        Some("concise")
+    );
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("context")),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_sets_all_turns_context_and_disables_parallel_tool_calls()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            model_info.supports_parallel_tool_calls = true;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("context"))
+            .and_then(|value| value.as_str()),
+        Some("all_turns")
+    );
+    pretty_assertions::assert_eq!(request_body.get("parallel_tool_calls"), Some(&json!(false)));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    model.supports_reasoning_summaries = true;
+    model.default_reasoning_summary = ReasoningSummary::Detailed;
+
+    let TestForall {
+        forall: codex,
+        config,
+        session_configured,
+        ..
+    } = test_forall()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: forall_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(config.cwd.clone())),
+                approval_policy: Some(config.permissions.approval_policy.value()),
+                sandbox_policy: Some(config.legacy_sandbox_policy()),
+                summary: Some(ReasoningSummary::Concise),
+                collaboration_mode: Some(forall_protocol::config_types::CollaborationMode {
+                    mode: forall_protocol::config_types::ModeKind::Default,
+                    settings: forall_protocol::config_types::Settings {
+                        model: session_configured.model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary"))
+            .and_then(|value| value.as_str()),
+        Some("concise")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_config(|config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::None);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary")),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut model_catalog = bundled_models_response().expect("bundled models.json should parse");
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    model.supports_reasoning_summaries = true;
+    model.default_reasoning_summary = ReasoningSummary::Detailed;
+
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.model_reasoning_summary = Some(ReasoningSummary::None);
+            config.model_catalog = Some(model_catalog);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary")),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } =
+        test_forall().with_model("gpt-5.4").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .and_then(|v| v.as_str()),
+        Some("low")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_model("test-no-verbosity")
+        .with_config(|config| {
+            config.model_verbosity = Some(Verbosity::High);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config.model_verbosity = Some(Verbosity::High);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("text")
+            .and_then(|t| t.get("verbosity"))
+            .and_then(|v| v.as_str()),
+        Some("high")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_developer_instructions_message_in_request() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let mut builder = test_forall()
+        .with_auth(ForallAuth::from_api_key("Test API Key"))
+        .with_pre_build_hook(|home| {
+            std::fs::write(home.join("AGENTS.md"), "be nice").expect("write global instructions");
+        })
+        .with_config(|config| {
+            config.developer_instructions = Some("be useful".to_string());
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    let permissions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid permissions message content");
+
+    assert!(
+        !request_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("be nice")
+    );
+    assert_message_role(&request_body["input"][0], "developer");
+    assert!(
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+    );
+
+    let developer_messages: Vec<&serde_json::Value> = request_body["input"]
+        .as_array()
+        .expect("input array")
+        .iter()
+        .filter(|item| item.get("role").and_then(|role| role.as_str()) == Some("developer"))
+        .collect();
+    assert!(
+        developer_messages
+            .iter()
+            .any(|item| message_input_texts(item).contains(&"be useful")),
+        "expected developer instructions in a developer message, got {:?}",
+        request_body["input"]
+    );
+
+    assert_message_role(&request_body["input"][1], "user");
+    let user_context_texts = message_input_texts(&request_body["input"][1]);
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("# AGENTS.md instructions")),
+        "expected AGENTS text in contextual user message, got {user_context_texts:?}"
+    );
+    let ui_text = user_context_texts
+        .iter()
+        .copied()
+        .find(|text| text.contains("<INSTRUCTIONS>"))
+        .expect("invalid message content");
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
+    assert!(ui_text.contains("be nice"));
+    assert!(
+        user_context_texts
+            .iter()
+            .any(|text| text.starts_with("<environment_context>")
+                && text.ends_with("</environment_context>")),
+        "expected environment context in contextual user message, got {user_context_texts:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn azure_responses_request_includes_store_and_reasoning_ids() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+
+    let sse_body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+    );
+    let resp_mock = mount_sse_once(&server, sse_body.to_string()).await;
+
+    let provider = ModelProviderInfo {
+        name: "azure".into(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        auth_header: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        requires_forall_auth: false,
+        supports_websockets: false,
+    };
+
+    let forall_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&forall_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort.clone();
+    let summary = config.model_reasoning_summary;
+    let model = forall_core::test_support::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+    let model_info =
+        forall_core::test_support::construct_model_info_offline(model.as_str(), &config);
+    let thread_id = ThreadId::new();
+    let auth_manager =
+        forall_core::test_support::auth_manager_from_auth(ForallAuth::from_api_key("Test API Key"));
+    let session_telemetry = SessionTelemetry::new(
+        thread_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        /*account_id*/ None,
+        Some("test@test.com".to_string()),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+
+    let client = ModelClient::new(
+        /*auth_manager*/ None,
+        thread_id,
+        provider.clone(),
+        SessionSource::Exec,
+        config.model_verbosity,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*item_ids_enabled*/ false,
+        /*attestation_provider*/ None,
+    );
+    let responses_metadata = test_turn_responses_metadata(&client, thread_id);
+    let mut client_session = client.new_session();
+
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Reasoning {
+        id: Some("reasoning-id".into()),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".into(),
+        }],
+        content: Some(vec![ReasoningItemContent::ReasoningText {
+            text: "content".into(),
+        }]),
+        encrypted_content: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::Message {
+        id: Some("message-id".into()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText {
+            text: "message".into(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::WebSearchCall {
+        id: Some("web-search-id".into()),
+        status: Some("completed".into()),
+        action: Some(WebSearchAction::Search {
+            query: Some("weather".into()),
+            queries: None,
+        }),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::FunctionCall {
+        id: Some("function-id".into()),
+        name: "do_thing".into(),
+        namespace: None,
+        arguments: "{}".into(),
+        call_id: "function-call-id".into(),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "function-call-id".into(),
+        output: FunctionCallOutputPayload::from_text("ok".into()),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::LocalShellCall {
+        id: Some("local-shell-id".into()),
+        call_id: Some("local-shell-call-id".into()),
+        status: LocalShellStatus::Completed,
+        action: LocalShellAction::Exec(LocalShellExecAction {
+            command: vec!["echo".into(), "hello".into()],
+            timeout_ms: None,
+            working_directory: None,
+            env: None,
+            user: None,
+        }),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::CustomToolCall {
+        id: Some("custom-tool-id".into()),
+        status: Some("completed".into()),
+        call_id: "custom-tool-call-id".into(),
+        name: "custom_tool".into(),
+        input: "{}".into(),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    prompt.input.push(ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: "custom-tool-call-id".into(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text("ok".into()),
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            effort,
+            summary.unwrap_or(ReasoningSummary::Auto),
+            /*service_tier*/ None,
+            &responses_metadata,
+            &forall_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("responses stream to start");
+
+    while let Some(event) = stream.next().await {
+        if let Ok(ResponseEvent::Completed { .. }) = event {
+            break;
+        }
+    }
+
+    let request = resp_mock.single_request();
+    assert_eq!(request.path(), "/openai/responses");
+    let body = request.body_json();
+
+    assert_eq!(body["store"], serde_json::Value::Bool(true));
+    assert_eq!(body["stream"], serde_json::Value::Bool(true));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(8));
+    assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
+    assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
+    assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
+    assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
+    assert_eq!(
+        body["input"][4]["call_id"].as_str(),
+        Some("function-call-id")
+    );
+    assert_eq!(body["input"][5]["id"].as_str(), Some("local-shell-id"));
+    assert_eq!(body["input"][6]["id"].as_str(), Some("custom-tool-id"));
+    assert_eq!(
+        body["input"][7]["call_id"].as_str(),
+        Some("custom-tool-call-id")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn token_count_includes_rate_limits_snapshot() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let sse_body = sse(vec![ev_completed_with_tokens(
+        "resp_rate",
+        /*total_tokens*/ 123,
+    )]);
+
+    let response = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .insert_header("x-forall-primary-used-percent", "12.5")
+        .insert_header("x-forall-secondary-used-percent", "40.0")
+        .insert_header("x-forall-primary-window-minutes", "10")
+        .insert_header("x-forall-secondary-window-minutes", "60")
+        .insert_header("x-forall-primary-reset-at", "1704069000")
+        .insert_header("x-forall-secondary-reset-at", "1704074400")
+        .set_body_raw(sse_body, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut provider =
+        built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
+
+    let mut builder = test_forall()
+        .with_auth(ForallAuth::from_api_key("test"))
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    let token_event = wait_for_event(
+        &codex,
+        |msg| matches!(msg, EventMsg::TokenCount(ev) if ev.info.is_some()),
+    )
+    .await;
+    let final_payload = match token_event {
+        EventMsg::TokenCount(ev) => ev,
+        _ => unreachable!(),
+    };
+    // Assert full JSON for the final token count event (usage + rate limits)
+    let final_json = serde_json::to_value(&final_payload).unwrap();
+    pretty_assertions::assert_eq!(
+        final_json,
+        json!({
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 123
+                },
+                "last_token_usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 123
+                },
+                // Default model is gpt-5.4 in tests → 95% usable context window
+                "model_context_window": 258400
+            },
+            "rate_limits": {
+                "limit_id": "codex",
+                "limit_name": null,
+                "primary": {
+                    "used_percent": 12.5,
+                    "window_minutes": 10,
+                    "resets_at": 1704069000
+                },
+                "secondary": {
+                    "used_percent": 40.0,
+                    "window_minutes": 60,
+                    "resets_at": 1704074400
+                },
+                "credits": null,
+                "individual_limit": null,
+                "plan_type": null,
+                "rate_limit_reached_type": null
+            }
+        })
+    );
+    let usage = final_payload
+        .info
+        .expect("token usage info should be recorded after completion");
+    assert_eq!(usage.total_token_usage.total_tokens, 123);
+    let final_snapshot = final_payload
+        .rate_limits
+        .expect("latest rate limit snapshot should be retained");
+    assert_eq!(
+        final_snapshot
+            .primary
+            .as_ref()
+            .map(|window| window.used_percent),
+        Some(12.5)
+    );
+    assert_eq!(
+        final_snapshot
+            .primary
+            .as_ref()
+            .and_then(|window| window.resets_at),
+        Some(1704069000)
+    );
+
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
+async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let response = ResponseTemplate::new(429)
+        .insert_header("x-forall-primary-used-percent", "100.0")
+        .insert_header("x-forall-secondary-used-percent", "87.5")
+        .insert_header("x-forall-primary-over-secondary-limit-percent", "95.0")
+        .insert_header("x-forall-primary-window-minutes", "15")
+        .insert_header("x-forall-secondary-window-minutes", "60")
+        .set_body_json(json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "limit reached",
+                "resets_at": 1704067242,
+                "plan_type": "pro"
+            }
+        }));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut builder = test_forall();
+    let forall_fixture = builder.build(&server).await?;
+    let codex = forall_fixture.forall.clone();
+
+    let expected_limits = json!({
+        "limit_id": "codex",
+        "limit_name": null,
+        "primary": {
+            "used_percent": 100.0,
+            "window_minutes": 15,
+            "resets_at": null
+        },
+        "secondary": {
+            "used_percent": 87.5,
+            "window_minutes": 60,
+            "resets_at": null
+        },
+        "credits": null,
+        "individual_limit": null,
+        "plan_type": null,
+        "rate_limit_reached_type": null
+    });
+
+    let submission_id = codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .expect("submission should succeed while emitting usage limit error events");
+
+    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let EventMsg::TokenCount(event) = token_event else {
+        unreachable!();
+    };
+
+    let event_json = serde_json::to_value(&event).expect("serialize token count event");
+    pretty_assertions::assert_eq!(
+        event_json,
+        json!({
+            "info": null,
+            "rate_limits": expected_limits
+        })
+    );
+
+    let error_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert!(
+        error_event.message.to_lowercase().contains("usage limit"),
+        "unexpected error message for submission {submission_id}: {}",
+        error_event.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
+
+    mount_sse_once_match(
+        &server,
+        body_string_contains("trigger context window"),
+        sse_failed(
+            "resp_context_window",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
+
+    mount_sse_once_match(
+        &server,
+        body_string_contains("seed turn"),
+        sse(vec![
+            ev_response_created("resp_seed"),
+            ev_completed("resp_seed"),
+        ]),
+    )
+    .await;
+
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_config(|config| {
+            config.model = Some("gpt-5.4".to_string());
+            config.model_context_window = Some(272_000);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger context window".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let token_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TokenCount(payload)
+                if payload.info.as_ref().is_some_and(|info| {
+                    info.model_context_window == Some(info.total_token_usage.total_tokens)
+                        && info.total_token_usage.total_tokens > 0
+                })
+        )
+    })
+    .await;
+
+    let EventMsg::TokenCount(token_payload) = token_event else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+
+    let info = token_payload
+        .info
+        .expect("token usage info present when context window is exceeded");
+
+    assert_eq!(info.model_context_window, Some(EFFECTIVE_CONTEXT_WINDOW));
+    assert_eq!(
+        info.total_token_usage.total_tokens,
+        EFFECTIVE_CONTEXT_WINDOW
+    );
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let expected_context_window_message = ForallErr::ContextWindowExceeded.to_string();
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err) if err.message == expected_context_window_message
+        ),
+        "expected context window error; got {error_event:?}"
+    );
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let incomplete_response = sse(vec![
+        ev_response_created("resp_incomplete"),
+        ev_message_item_added("msg_incomplete", "partial content"),
+        ev_output_text_delta("continued chunk"),
+        json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_incomplete",
+                "object": "response",
+                "status": "incomplete",
+                "error": null,
+                "incomplete_details": {
+                    "reason": "content_filter"
+                }
+            }
+        }),
+    ]);
+
+    let responses_mock = mount_sse_once(&server, incomplete_response).await;
+
+    let TestForall { forall: codex, .. } = test_forall()
+        .with_config(|config| {
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build(&server)
+        .await?;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger incomplete".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err)
+                if err.message
+                    == "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+        ),
+        "expected incomplete content filter error; got {error_event:?}"
+    );
+
+    assert_eq!(responses_mock.requests().len(), 1);
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
+
+/// We try to avoid setting env vars in tests because std::env::set_var() is
+/// process-wide and unsafe. Though for this test, we want to simulate the
+/// presence of an environment variable that the provider will read for auth, so
+/// we pick a commonly existing env var that is guaranteed to have a non-empty
+/// value on both Windows and Unix. Note that this test must also work when run
+/// under Bazel in CI, which uses a restricted environment, so PATH seems like
+/// the safest choice.
+const EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE: &str = "PATH";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn azure_overrides_assign_properties_used_for_responses_url() {
+    skip_if_no_network!();
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    // First request – must NOT include `previous_response_id`.
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            "text/event-stream",
+        );
+
+    // Expect POST to /openai/responses with api-version query param
+    Mock::given(method("POST"))
+        .and(path("/openai/responses"))
+        .and(query_param("api-version", "2025-04-01-preview"))
+        .and(header_regex("Custom-Header", "Value"))
+        .and(header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                std::env::var(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE).unwrap()
+            )
+            .as_str(),
+        ))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "custom".to_string(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        // Reuse the existing environment variable to avoid using unsafe code
+        env_key: Some(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE.to_string()),
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        auth_header: None,
+        query_params: Some(std::collections::HashMap::from([(
+            "api-version".to_string(),
+            "2025-04-01-preview".to_string(),
+        )])),
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        http_headers: Some(std::collections::HashMap::from([(
+            "Custom-Header".to_string(),
+            "Value".to_string(),
+        )])),
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        requires_forall_auth: false,
+        supports_websockets: false,
+    };
+
+    // Init session
+    let mut builder = test_forall()
+        .with_auth(create_dummy_forall_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn env_var_overrides_loaded_auth() {
+    skip_if_no_network!();
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    // First request – must NOT include `previous_response_id`.
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+            "text/event-stream",
+        );
+
+    // Expect POST to /openai/responses with api-version query param
+    Mock::given(method("POST"))
+        .and(path("/openai/responses"))
+        .and(query_param("api-version", "2025-04-01-preview"))
+        .and(header_regex("Custom-Header", "Value"))
+        .and(header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                std::env::var(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE).unwrap()
+            )
+            .as_str(),
+        ))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "custom".to_string(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        // Reuse the existing environment variable to avoid using unsafe code
+        env_key: Some(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE.to_string()),
+        query_params: Some(std::collections::HashMap::from([(
+            "api-version".to_string(),
+            "2025-04-01-preview".to_string(),
+        )])),
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        aws: None,
+        auth_header: None,
+        wire_api: WireApi::Responses,
+        http_headers: Some(std::collections::HashMap::from([(
+            "Custom-Header".to_string(),
+            "Value".to_string(),
+        )])),
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        requires_forall_auth: false,
+        supports_websockets: false,
+    };
+
+    // Init session
+    let mut builder = test_forall()
+        .with_auth(create_dummy_forall_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
+fn create_dummy_forall_auth() -> ForallAuth {
+    ForallAuth::create_dummy_api_key_auth_for_testing()
+}
+
+/// Scenario:
+/// - Turn 1: user sends U1; model streams deltas then a final assistant message A.
+/// - Turn 2: user sends U2; model streams a delta then the same final assistant message A.
+/// - Turn 3: user sends U3; model responds (same SSE again, not important).
+///
+/// We assert that the `input` sent on each turn contains the expected conversation history
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn history_dedupes_streamed_and_final_messages_across_turns() {
+    // Skip under Forall sandbox network restrictions (mirrors other tests).
+    skip_if_no_network!();
+
+    // Mock server that will receive three sequential requests and return the same SSE stream
+    // each time: a few deltas, then a final assistant message, then completed.
+    let server = MockServer::start().await;
+
+    // Build a small SSE stream with deltas and a final assistant message.
+    // We emit the same body for all 3 turns.
+    let sse1 = sse(vec![
+        ev_message_item_added("msg-1", ""),
+        ev_output_text_delta("Hey "),
+        ev_output_text_delta("there"),
+        ev_output_text_delta("!\n"),
+        ev_assistant_message("msg-1", "Hey there!\n"),
+        ev_completed("resp1"),
+    ]);
+
+    let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
+
+    let mut builder = test_forall().with_auth(ForallAuth::from_api_key("Test API Key"));
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .forall;
+
+    // Turn 1: user sends U1; wait for completion.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    // Turn 2: user sends U2; wait for completion.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    // Turn 3: user sends U3; wait for completion.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U3".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    // Inspect the three captured requests.
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
+    for request in &requests {
+        assert_eq!(request.path(), "/v1/responses");
+    }
+
+    // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.
+    let r3_tail_expected = json!([
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type":"input_text","text":"U1"}]
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type":"output_text","text":"Hey there!\n"}]
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type":"input_text","text":"U2"}]
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type":"output_text","text":"Hey there!\n"}]
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type":"input_text","text":"U3"}]
+        }
+    ]);
+
+    let r3_input_array = requests[2]
+        .body_json()
+        .get("input")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .expect("r3 missing input array");
+    // skipping earlier context and developer messages
+    let tail_len = r3_tail_expected.as_array().unwrap().len();
+    let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
+    assert_eq!(
+        strip_metadata_from_json(serde_json::Value::Array(actual_tail.to_vec())),
+        r3_tail_expected,
+        "request 3 tail mismatch",
+    );
+}

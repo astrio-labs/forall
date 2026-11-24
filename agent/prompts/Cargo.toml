@@ -1,0 +1,25 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-prompts"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_prompts"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-context-fragments = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-execpolicy = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-template = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

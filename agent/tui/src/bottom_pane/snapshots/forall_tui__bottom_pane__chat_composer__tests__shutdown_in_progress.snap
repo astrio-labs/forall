@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 11054
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────╮"
+"│▌ Shutting down...                    │"
+"│                                      │"
+"│                                      │"
+"╰──────────────────────────────────────╯"

@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2443
+expression: "format!(\"started hidden:\\n{started_hidden_snapshot}\\nhistory:\\n{history}\")"
+---
+started hidden:
+<empty>
+
+history:

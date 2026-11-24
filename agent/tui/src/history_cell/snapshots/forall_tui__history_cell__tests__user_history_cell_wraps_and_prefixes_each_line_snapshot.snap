@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1978
+expression: rendered
+---
+
+▌ one two
+  three
+  four five
+  six seven

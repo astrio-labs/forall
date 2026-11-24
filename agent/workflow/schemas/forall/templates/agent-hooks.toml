@@ -1,0 +1,18 @@
+# Forall agent hooks
+#
+# Install project scripts:
+#   forall hooks install
+#
+# Then merge `.forall/hooks.json` into ~/.forall/hooks.json
+# (or copy the PostToolUse / Stop sections into ~/.forall/config.toml).
+#
+# Active change resolution (first match wins):
+#   1. FORALL_CHANGE env var
+#   2. .forall/.active-change file (set by `forall propose`)
+#   3. sole active change in .forall/changes/
+
+# Example after `forall hooks install` (paths are absolute in the generated hooks.json):
+
+# PostToolUse → validate local authoring inputs with native `author.validate`
+# Stop        → require successful native `verify.status` before verified claims
+# Equivalent external MCP tools are optional.

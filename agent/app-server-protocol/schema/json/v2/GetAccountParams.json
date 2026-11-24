@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "refreshToken": {
+      "description": "Reserved for backward compatibility. BYOK auth does not perform token refresh.",
+      "type": "boolean"
+    }
+  },
+  "title": "GetAccountParams",
+  "type": "object"
+}

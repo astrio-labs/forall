@@ -1,0 +1,21 @@
+[package]
+name = "forall-utils-sandbox-summary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-core = { workspace = true }
+forall-model-provider-info = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+
+[dev-dependencies]
+forall-utils-absolute-path = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lib]
+doctest = false

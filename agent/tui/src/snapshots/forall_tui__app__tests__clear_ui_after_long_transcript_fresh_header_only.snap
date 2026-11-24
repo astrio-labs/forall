@@ -1,0 +1,14 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 4001
+expression: rendered
+---
+███████  ██████  ██████   █████  ██      ██      
+██      ██    ██ ██   ██ ██   ██ ██      ██      
+█████   ██    ██ ██████  ███████ ██      ██      
+██      ██    ██ ██   ██ ██   ██ ██      ██      
+██       ██████  ██   ██ ██   ██ ███████ ███████
+
+version:   v<VERSION>
+model:     gpt-test high   /model to change
+directory: /tmp/project

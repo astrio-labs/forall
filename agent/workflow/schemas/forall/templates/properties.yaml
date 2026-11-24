@@ -1,0 +1,4 @@
+# Optional property decomposition for this change (see docs/verified-engineering/pbt.md)
+properties: []
+# composition: |
+#   Unit properties cover spec scenarios for this change.

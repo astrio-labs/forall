@@ -1,0 +1,12 @@
+version: 1
+requirements:
+  - id: example-requirement
+    capability: example
+    requirement: "Example Requirement"
+    verified: true
+    code:
+      file: src/example.ts
+      symbols: [exampleFn]
+    contract: |
+      Describe intent in natural language.
+    claimcheck: false

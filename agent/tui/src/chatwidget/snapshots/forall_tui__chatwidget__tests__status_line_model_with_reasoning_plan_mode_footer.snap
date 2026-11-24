@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 1253
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"                                                            gpt-5.3-codex medium"
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│▌ Ask Forall to do anything                                                   │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"gpt-5.3-codex medium                              Plan mode (shift+tab to cycle)"

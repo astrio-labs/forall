@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 4658
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│▌ @sa                                                                                             │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"> Sample Plugin  Plugin with skills and an MCP server                                         Plugin"
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"  enter insert · esc close · ←/→ switch search modes     [All Results]   Filesystem Only    Plugins "

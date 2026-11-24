@@ -1,0 +1,23 @@
+---
+source: tui/src/chatwidget/tests/review_mode.rs
+assertion_line: 1473
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
+---
+
+
+
+
+
+
+
+
+
+• Working (0s • esc to interrupt)
+
+• Messages to be submitted at end of turn
+  ↳ Steer submitted while /review was running.
+                                                             gpt-5.6-sol default
+╭──────────────────────────────────────────────────────────────────────────────╮
+│▌ Ask Forall to do anything                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+? for shortcuts                                                100% context left

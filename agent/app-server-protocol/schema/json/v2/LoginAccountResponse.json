@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "enum": [
+            "apiKey"
+          ],
+          "title": "ApiKeyv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ApiKeyv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "description": "A managed Forall OAuth login has started; the client should open `auth_url` in a browser. Completion is reported via `account/login/completed`, and the login can be aborted with `account/login/cancel` using `login_id`.",
+      "properties": {
+        "authUrl": {
+          "type": "string"
+        },
+        "loginId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "oauth"
+          ],
+          "title": "Oauthv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authUrl",
+        "loginId",
+        "type"
+      ],
+      "title": "Oauthv2::LoginAccountResponse",
+      "type": "object"
+    }
+  ],
+  "title": "LoginAccountResponse"
+}

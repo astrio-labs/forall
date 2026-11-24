@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "connectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "connectId"
+  ],
+  "title": "GithubConnectCancelParams",
+  "type": "object"
+}

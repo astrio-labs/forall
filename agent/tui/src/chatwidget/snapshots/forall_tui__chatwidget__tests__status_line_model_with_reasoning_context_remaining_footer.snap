@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 1359
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"                                                              gpt-5.4 xhigh fast"
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│▌ Ask Forall to do anything                                                   │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"gpt-5.4 xhigh fast · Context 100% left · /tmp/project                           "

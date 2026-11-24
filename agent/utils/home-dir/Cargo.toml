@@ -1,0 +1,20 @@
+[package]
+name = "forall-utils-home-dir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-utils-absolute-path = { workspace = true }
+dirs = { workspace = true }
+dotenvy = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[lib]
+doctest = false

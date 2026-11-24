@@ -1,0 +1,20 @@
+[package]
+name = "forall-file-system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[lib]
+test = false
+doctest = false

@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "BlockDecisionWire": {
+      "enum": [
+        "block"
+      ],
+      "type": "string"
+    },
+    "UserPromptSubmitHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "default": null,
+          "type": "string"
+        },
+        "hookEventName": {
+          "const": "UserPromptSubmit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "VerificationStateWire": {
+      "enum": [
+        "fresh",
+        "stale",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "VerificationSummaryWire": {
+      "properties": {
+        "change": {
+          "type": "string"
+        },
+        "criticalIssues": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "propertyTested": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "proved": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reportPath": {
+          "type": "string"
+        },
+        "specTracked": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "staleGrade": {
+          "description": "Which kind of drift a `stale` state refers to (`code_drift`, `spec_drift`, `toolchain_drift`, `unknown`). Open string so future grades stay additive.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/VerificationStateWire"
+        },
+        "totalRequirements": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "criticalIssues",
+        "propertyTested",
+        "proved",
+        "specTracked",
+        "state",
+        "totalRequirements"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "decision": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BlockDecisionWire"
+        }
+      ],
+      "default": null
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "reason": {
+      "default": null,
+      "type": "string"
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    },
+    "verificationSummary": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/VerificationSummaryWire"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "user-prompt-submit.command.output",
+  "type": "object"
+}

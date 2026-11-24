@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2240
+expression: "hook_live_and_history_snapshot(&chat, \"running\", \"\")"
+---
+running
+live hooks:
+• Running 3 PreToolUse hooks: checking command policy
+history:
+<empty>

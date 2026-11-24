@@ -1,0 +1,551 @@
+[workspace]
+members = [
+    "analytics",
+    "ansi-escape",
+    "app-server",
+    "app-server-client",
+    "app-server-daemon",
+    "app-server-protocol",
+    "app-server-test-client",
+    "app-server-transport",
+    "app-server/tests/common",
+    "apply-patch",
+    "arg0",
+    "async-utils",
+    "aws-auth",
+    "cli",
+    "code-mode",
+    "code-mode-protocol",
+    "forall-api",
+    "forall-client",
+    "forall-experimental-api-macros",
+    "forall-home",
+    "forall-mcp",
+    "workflow",
+    "collaboration-mode-templates",
+    "config",
+    "context-fragments",
+    "core",
+    "core-api",
+    "core-plugins",
+    "core-skills",
+    "core/tests/common",
+    "exec",
+    "exec-server",
+    "execpolicy",
+    "ext/extension-api",
+    "ext/goal",
+    "ext/guardian",
+    "ext/image-generation",
+    "ext/mcp",
+    "ext/memories",
+    "ext/skills",
+    "ext/web-search",
+    "external-agent-migration",
+    "external-agent-sessions",
+    "features",
+    "feedback",
+    "forall",
+    "file-search",
+    "file-system",
+    "file-watcher",
+    "git-utils",
+    "hooks",
+    "install-context",
+    "keyring-store",
+    "linux-sandbox",
+    "lmstudio",
+    "login",
+    "mcp-server",
+    "mcp-server/tests/common",
+    "memories/read",
+    "memories/write",
+    "message-history",
+    "model-provider",
+    "model-provider-info",
+    "models-manager",
+    "network-proxy",
+    "ollama",
+    "otel",
+    "plugin",
+    "process-hardening",
+    "prompts",
+    "protocol",
+    "response-debug-context",
+    "responses-api-proxy",
+    "rmcp-client",
+    "rollout",
+    "rollout-trace",
+    "sandboxing",
+    "secrets",
+    "shell-command",
+    "shell-escalation",
+    "skills",
+    "state",
+    "stdio-to-uds",
+    "terminal-detection",
+    "test-binary-support",
+    "thread-store",
+    "tools",
+    "tui",
+    "uds",
+    "utils/absolute-path",
+    "utils/approval-presets",
+    "utils/cache",
+    "utils/cargo-bin",
+    "utils/cli",
+    "utils/elapsed",
+    "utils/fuzzy-match",
+    "utils/home-dir",
+    "utils/image",
+    "utils/json-to-toml",
+    "utils/oss",
+    "utils/output-truncation",
+    "utils/path-uri",
+    "utils/path-utils",
+    "utils/plugins",
+    "utils/pty",
+    "utils/readiness",
+    "utils/rustls-provider",
+    "utils/sandbox-summary",
+    "utils/sleep-inhibitor",
+    "utils/stream-parser",
+    "utils/string",
+    "utils/template",
+    "windows-sandbox-rs",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.5.0"
+# Track the edition for all workspace crates in one place. Individual
+# crates can still override this value, but keeping it here means new
+# crates created with `cargo new -w ...` automatically inherit the 2024
+# edition.
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal
+app_test_support = { path = "app-server/tests/common" }
+forall-analytics = { path = "analytics" }
+forall-agent-graph-store = { path = "agent-graph-store" }
+forall-ansi-escape = { path = "ansi-escape" }
+forall-api = { path = "forall-api" }
+forall-aws-auth = { path = "aws-auth" }
+forall-app-server = { path = "app-server" }
+forall-app-server-transport = { path = "app-server-transport" }
+forall-app-server-daemon = { path = "app-server-daemon" }
+forall-app-server-client = { path = "app-server-client" }
+forall-app-server-protocol = { path = "app-server-protocol" }
+forall-app-server-test-client = { path = "app-server-test-client" }
+forall-apply-patch = { path = "apply-patch" }
+forall-arg0 = { path = "arg0" }
+forall-async-utils = { path = "async-utils" }
+forall-cli = { path = "cli" }
+forall-client = { path = "forall-client" }
+forall-collaboration-mode-templates = { path = "collaboration-mode-templates" }
+forall-code-mode = { path = "code-mode" }
+forall-code-mode-protocol = { path = "code-mode-protocol" }
+forall-home = { path = "forall-home" }
+forall-config = { path = "config" }
+forall-context-fragments = { path = "context-fragments" }
+forall-core = { path = "core" }
+forall-core-api = { path = "core-api" }
+forall-core-plugins = { path = "core-plugins" }
+forall-core-skills = { path = "core-skills" }
+forall-exec = { path = "exec" }
+forall-file-system = { path = "file-system" }
+forall-exec-server = { path = "exec-server" }
+forall-execpolicy = { path = "execpolicy" }
+forall-extension-api = { path = "ext/extension-api" }
+forall-goal-extension = { path = "ext/goal" }
+forall-guardian = { path = "ext/guardian" }
+forall-image-generation-extension = { path = "ext/image-generation" }
+forall-external-agent-migration = { path = "external-agent-migration" }
+forall-external-agent-sessions = { path = "external-agent-sessions" }
+forall-experimental-api-macros = { path = "forall-experimental-api-macros" }
+forall-features = { path = "features" }
+forall-feedback = { path = "feedback" }
+forall-agent-bridge = { path = "forall" }
+forall-install-context = { path = "install-context" }
+forall-file-search = { path = "file-search" }
+forall-file-watcher = { path = "file-watcher" }
+forall-git-utils = { path = "git-utils" }
+forall-hooks = { path = "hooks" }
+forall-keyring-store = { path = "keyring-store" }
+forall-linux-sandbox = { path = "linux-sandbox" }
+forall-lmstudio = { path = "lmstudio" }
+forall-login = { path = "login" }
+forall-message-history = { path = "message-history" }
+forall-memories-extension = { path = "ext/memories" }
+forall-web-search-extension = { path = "ext/web-search" }
+forall-memories-read = { path = "memories/read" }
+forall-memories-write = { path = "memories/write" }
+forall-mcp = { path = "forall-mcp" }
+forall-hosted-verify = { path = "../crates/forall-hosted-verify" }
+forall-workflow = { path = "workflow" }
+forall-mcp-extension = { path = "ext/mcp" }
+forall-mcp-server = { path = "mcp-server" }
+forall-model-provider-info = { path = "model-provider-info" }
+forall-models-manager = { path = "models-manager" }
+forall-network-proxy = { path = "network-proxy" }
+forall-ollama = { path = "ollama" }
+forall-otel = { path = "otel" }
+forall-plugin = { path = "plugin" }
+forall-model-provider = { path = "model-provider" }
+forall-process-hardening = { path = "process-hardening" }
+forall-protocol = { path = "protocol" }
+forall-prompts = { path = "prompts" }
+forall-responses-api-proxy = { path = "responses-api-proxy" }
+forall-response-debug-context = { path = "response-debug-context" }
+forall-rmcp-client = { path = "rmcp-client" }
+forall-rollout = { path = "rollout" }
+forall-rollout-trace = { path = "rollout-trace" }
+forall-sandboxing = { path = "sandboxing" }
+forall-secrets = { path = "secrets" }
+forall-shell-command = { path = "shell-command" }
+forall-shell-escalation = { path = "shell-escalation" }
+forall-skills-extension = { path = "ext/skills" }
+forall-skills = { path = "skills" }
+forall-state = { path = "state" }
+forall-stdio-to-uds = { path = "stdio-to-uds" }
+forall-terminal-detection = { path = "terminal-detection" }
+forall-test-binary-support = { path = "test-binary-support" }
+forall-thread-store = { path = "thread-store" }
+forall-tools = { path = "tools" }
+forall-tui = { path = "tui" }
+forall-uds = { path = "uds" }
+forall-utils-absolute-path = { path = "utils/absolute-path" }
+forall-utils-approval-presets = { path = "utils/approval-presets" }
+forall-utils-cache = { path = "utils/cache" }
+forall-utils-cargo-bin = { path = "utils/cargo-bin" }
+forall-utils-cli = { path = "utils/cli" }
+forall-utils-elapsed = { path = "utils/elapsed" }
+forall-utils-fuzzy-match = { path = "utils/fuzzy-match" }
+forall-utils-home-dir = { path = "utils/home-dir" }
+forall-utils-image = { path = "utils/image" }
+forall-utils-json-to-toml = { path = "utils/json-to-toml" }
+forall-utils-oss = { path = "utils/oss" }
+forall-utils-output-truncation = { path = "utils/output-truncation" }
+forall-utils-path = { path = "utils/path-utils" }
+forall-utils-path-uri = { path = "utils/path-uri" }
+forall-utils-plugins = { path = "utils/plugins" }
+forall-utils-pty = { path = "utils/pty" }
+forall-utils-rustls-provider = { path = "utils/rustls-provider" }
+forall-utils-sandbox-summary = { path = "utils/sandbox-summary" }
+forall-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
+forall-utils-stream-parser = { path = "utils/stream-parser" }
+forall-utils-string = { path = "utils/string" }
+forall-utils-template = { path = "utils/template" }
+forall-v8-poc = { path = "v8-poc" }
+forall-windows-sandbox = { path = "windows-sandbox-rs" }
+core_test_support = { path = "core/tests/common" }
+mcp_test_support = { path = "mcp-server/tests/common" }
+
+# External
+age = "0.11.1"
+allocative = "0.3.3"
+ansi-to-tui = "7.0.0"
+anyhow = "1"
+arboard = { version = "3", features = ["wayland-data-control"] }
+arc-swap = "1.9.0"
+assert_cmd = "2"
+assert_matches = "1.5.0"
+async-channel = "2.3.1"
+async-io = "2.6.0"
+async-stream = "0.3.6"
+aws-config = "1"
+aws-credential-types = "1"
+aws-sigv4 = "1"
+aws-types = "1"
+axum = { version = "0.8", default-features = false }
+base64 = "0.22.1"
+bm25 = "2.3.2"
+bytes = "1.10.1"
+chardetng = "0.1.17"
+chrono = "0.4.43"
+clap = "4"
+clap_complete = "4"
+clatter = { version = "2.2.0", default-features = false, features = [
+    "alloc",
+    "getrandom",
+    "use-25519",
+    "use-aes-gcm",
+    "use-rust-crypto-ml-kem",
+    "use-sha",
+] }
+color-eyre = "0.6.3"
+constant_time_eq = "0.3.1"
+crc32fast = "1.5.0"
+crossbeam-channel = "0.5.15"
+crypto_box = { version = "0.9.1", features = ["seal"] }
+crossterm = "0.28.1"
+csv = "1.3.1"
+ctor = "0.6.3"
+deno_core_icudata = "0.77.0"
+derive_more = "2"
+diffy = "0.4.2"
+dirs = "6"
+divan = "0.1.21"
+dns-lookup = "3.0.1"
+dotenvy = "0.15.7"
+dunce = "1.0.4"
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
+encoding_rs = "0.8.35"
+env_logger = "0.11.9"
+eventsource-stream = "0.2.3"
+flate2 = "1.1.8"
+futures = { version = "0.3", default-features = false }
+gethostname = "1.1.0"
+gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
+glob = "0.3"
+globset = "0.4"
+hmac = "0.12.1"
+http = "1.3.1"
+iana-time-zone = "0.1.64"
+icu_decimal = "2.1"
+icu_locale_core = "2.1"
+icu_provider = { version = "2.1", features = ["sync"] }
+ignore = "0.4.23"
+image = { version = "^0.25.9", default-features = false }
+include_dir = "0.7.4"
+indexmap = "2.12.0"
+insta = "1.46.3"
+inventory = "0.3.19"
+itertools = "0.14.0"
+jsonptr = { version = "0.7.1", default-features = false }
+jsonwebtoken = "9.3.1"
+keyring = { version = "3.6", default-features = false }
+landlock = "0.4.4"
+lazy_static = "1"
+libc = "0.2.182"
+# Keep SQLx's bundled SQLite on a version containing the WAL-reset corruption fix:
+# https://www.sqlite.org/wal.html#the_wal_reset_bug
+libsqlite3-sys = { version = "0.37", default-features = false }
+log = "0.4"
+lru = "0.16.3"
+maplit = "1.0.2"
+memchr = "2.7.6"
+mime_guess = "2.0.5"
+multimap = "0.10.0"
+notify = "8.2.0"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
+once_cell = "1.20.2"
+openssl-sys = "*"
+opentelemetry = "0.31.0"
+opentelemetry-appender-tracing = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+os_info = "3.12.0"
+owo-colors = "4.3.0"
+path-absolutize = "3.1.1"
+pathdiff = "0.2"
+portable-pty = "0.9.0"
+predicates = "3"
+pretty_assertions = "1.4.1"
+pulldown-cmark = "0.10"
+quick-xml = "0.38.4"
+rand = "0.9"
+rsa = { version = "0.9.8", features = ["pem", "std"] }
+ratatui = "0.29.0"
+ratatui-macros = "0.6.0"
+rcgen = { version = "0.14.7", default-features = false, features = [
+    "aws_lc_rs",
+    "pem",
+] }
+regex = "1.12.3"
+regex-lite = "0.1.8"
+reqwest = { version = "0.12", features = ["cookies"] }
+rmcp = { version = "1.7.0", default-features = false }
+runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+rustls = { version = "0.23", default-features = false, features = [
+    "aws_lc_rs",
+    "std",
+] }
+rustls-native-certs = "0.8.3"
+rustls-pki-types = "1.14.0"
+schemars = "0.8.22"
+seccompiler = "0.5.0"
+semver = "1.0"
+sentry = "0.46.0"
+serde = "1"
+serde_ignored = "0.1.14"
+serde_json = "1"
+serde_path_to_error = "0.1.20"
+serde_with = "3.17"
+serde_yaml = "0.9"
+serial_test = "3.2.0"
+sha1 = "0.10.6"
+sha2 = "0.10"
+shlex = "1.3.0"
+similar = "2.7.0"
+socket2 = "0.6.1"
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "chrono",
+    "json",
+    "macros",
+    "migrate",
+    "runtime-tokio",
+    "tls-rustls",
+    "sqlite-bundled",
+    "time",
+    "uuid",
+] }
+starlark = { version = "0.14.2", default-features = false }
+strum = "0.27.2"
+strum_macros = "0.28.0"
+supports-color = "3.0.2"
+syntect = "5"
+sys-locale = "0.3.2"
+system-configuration = "0.7"
+tar = { version = "=0.4.45", default-features = false }
+tempfile = "3.23.0"
+test-log = "0.2.19"
+textwrap = "0.16.2"
+thiserror = "2.0.17"
+time = "0.3.47"
+tiny_http = "0.12"
+tokio = "1"
+tokio-stream = "0.1.18"
+tokio-test = "0.4"
+tokio-tungstenite = { version = "0.28.0", features = [
+    "proxy",
+    "rustls-tls-native-roots",
+] }
+tokio-util = "0.7.18"
+toml = "0.9.5"
+toml_edit = "0.24.0"
+tracing = "0.1.44"
+tracing-appender = "0.2.3"
+tracing-opentelemetry = "0.32.0"
+tracing-subscriber = "0.3.22"
+tracing-test = "0.2.5"
+tonic = { version = "0.14.3", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14.3"
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-java = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+ts-rs = "11"
+tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
+uds_windows = "1.1.0"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2"
+url = "2"
+urlencoding = "2.1"
+uuid = "1"
+v8 = "=149.2.0"
+vt100 = "0.16.2"
+walkdir = "2.5.0"
+webbrowser = "1.0"
+which = "8"
+whoami = "1.6.1"
+wildmatch = "2.6.1"
+winapi-util = "0.1.11"
+zip = "2.4.2"
+zstd = "0.13"
+
+wiremock = "0.6"
+zeroize = "1.8.2"
+
+[workspace.lints]
+rust = {}
+
+[workspace.lints.clippy]
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+needless_borrow = "deny"
+needless_borrowed_reference = "deny"
+needless_collect = "deny"
+needless_late_init = "deny"
+needless_option_as_deref = "deny"
+needless_question_mark = "deny"
+needless_update = "deny"
+redundant_clone = "deny"
+redundant_closure = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_static_lifetimes = "deny"
+trivially_copy_pass_by_ref = "deny"
+uninlined_format_args = "deny"
+unnecessary_filter_map = "deny"
+unnecessary_lazy_evaluations = "deny"
+unnecessary_sort_by = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"
+
+# cargo-shear cannot see the platform-specific openssl-sys usage, so we
+# silence the false positive here instead of deleting a real dependency.
+[workspace.metadata.cargo-shear]
+ignored = [
+    "forall-agent-graph-store",
+    "icu_provider",
+    "openssl-sys",
+    "forall-v8-poc",
+]
+
+[profile.dev]
+# Keep line tables/backtraces while avoiding expensive full variable debug info
+# across local dev builds.
+debug = "limited"
+
+[profile.dev-small]
+inherits = "dev"
+opt-level = 0
+debug = "none"
+strip = "symbols"
+
+[profile.release]
+lto = "thin"
+debug = "line-tables-only"
+split-debuginfo = "off"
+# Keep release binaries symbolicateable until packaging has archived the
+# sidecar symbols and stripped the binaries.
+strip = false
+
+# Balance parallel release code generation against binary size.
+codegen-units = 4
+
+[profile.profiling]
+inherits = "release"
+debug = "full"
+lto = false
+strip = false
+
+[profile.ci-test]
+# Reduce binary size to reduce disk pressure.
+debug = "limited"
+inherits = "test"
+opt-level = 0
+
+[patch.crates-io]
+# Uncomment to debug local changes.
+# ratatui = { path = "../../ratatui" }
+crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc99427fd3b071681b07fc31c6ce995" }
+ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
+
+# Uncomment to debug local changes.
+# rmcp = { path = "../../rust-sdk/crates/rmcp" }
+
+[patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }

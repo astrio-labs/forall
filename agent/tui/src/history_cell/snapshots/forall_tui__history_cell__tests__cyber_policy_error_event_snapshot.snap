@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 699
+expression: rendered
+---
+ⓘ This chat was flagged for possible cybersecurity risk
+  If this seems wrong, try rephrasing your request. For security-related work,
+  visit the Forall dashboard for support.
+  https://forall.astrio.app/dashboard

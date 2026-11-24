@@ -1,0 +1,21 @@
+[package]
+name = "forall-install-context"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forall_install_context"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-utils-absolute-path = { workspace = true }
+forall-utils-home-dir = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

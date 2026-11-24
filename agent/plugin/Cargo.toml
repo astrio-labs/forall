@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-plugin"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_plugin"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-config = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-plugins = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

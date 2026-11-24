@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 2028
+expression: rendered
+---
+
+  [Image #1]
+  [Image #2]
+
+▌ describe both

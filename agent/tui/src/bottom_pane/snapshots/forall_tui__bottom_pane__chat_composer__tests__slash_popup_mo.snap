@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 7764
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────╮"
+"│▌ /mo                                                     │"
+"╰──────────────────────────────────────────────────────────╯"
+"  /model  choose what model and reasoning effort to use (or "
+"          `/model <slug>`)                                  "

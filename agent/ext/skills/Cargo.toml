@@ -1,0 +1,35 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-skills-extension"
+version.workspace = true
+
+[lib]
+name = "forall_skills_extension"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-core-skills = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-mcp = { workspace = true }
+forall-protocol = { workspace = true }
+forall-tools = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+forall-utils-string = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

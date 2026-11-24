@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Account": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "apiKey"
+              ],
+              "title": "ApiKeyAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ApiKeyAccount",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "credentialSource": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AmazonBedrockCredentialSource"
+                }
+              ],
+              "default": "awsManaged"
+            },
+            "type": {
+              "enum": [
+                "amazonBedrock"
+              ],
+              "title": "AmazonBedrockAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AmazonBedrockAccount",
+          "type": "object"
+        },
+        {
+          "description": "Managed Forall OAuth account.",
+          "properties": {
+            "email": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "default": null,
+              "description": "Profile display name, when the identity provider supplies one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "planType": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PlanType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "type": {
+              "enum": [
+                "oauth"
+              ],
+              "title": "OauthAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OauthAccount",
+          "type": "object"
+        }
+      ]
+    },
+    "AmazonBedrockCredentialSource": {
+      "enum": [
+        "forallManaged",
+        "awsManaged"
+      ],
+      "type": "string"
+    },
+    "PlanType": {
+      "enum": [
+        "free",
+        "go",
+        "plus",
+        "pro",
+        "prolite",
+        "team",
+        "self_serve_business_usage_based",
+        "business",
+        "enterprise_cbp_usage_based",
+        "enterprise",
+        "edu",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "account": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Account"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requiresOpenaiAuth": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "requiresOpenaiAuth"
+  ],
+  "title": "GetAccountResponse",
+  "type": "object"
+}

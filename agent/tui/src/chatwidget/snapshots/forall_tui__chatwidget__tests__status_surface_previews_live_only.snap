@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/status_surface_previews.rs
+assertion_line: 88
+expression: snapshot
+---
+status line: preview-live-root · feature/live-preview-branch · Live preview thread
+terminal title: preview-live-root | Live preview thread | feature/live-preview-branch | Tasks 2/5

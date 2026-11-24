@@ -6,7 +6,7 @@ path for external agents.
 ```text
 Path A — Forall CLI                         Path B — MCP verify-only
 ───────────────────                         ────────────────────────
-install.sh → forall binary                  npm: @astrio/forall-mcp
+Cargo → forall binary                  npm: @astrio/forall-mcp
 TUI: Forall account OR BYOK                 dashboard API key in MCP config
 native authoring + workflow in-process      stdio → hosted HTTP MCP
 optional hosted verify via Forall API key   verify tools only (no workspace writes)
@@ -16,7 +16,7 @@ See [getting-started.md](getting-started.md).
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
-│  Path A: `forall` binary (closed-source distribution)    │
+│  Path A: `forall` binary (built from source)    │
 │  agent TUI · native tools · sandbox · workflow commands    │
 └────────────────────────────┬───────────────────────────────┘
                              │
@@ -60,8 +60,10 @@ Forall account also unlocks hosted verification and account-tied quotas.
 | Hosted client | `crates/forall-hosted-verify` | Snapshot packaging and authenticated submit/status/cancel/explain |
 | npm MCP bridge | `packages/forall-mcp` | Stdio → hosted MCP for external agents (`@astrio/forall-mcp`) |
 
-The full agent runtime (TUI, turn loop, sandbox, native tool registry) is
-distributed only as the prebuilt `forall` binary.
+The Rust workspace in [`agent/`](../agent/) contains the CLI, terminal UI,
+agent loop, sandbox and workflow engine. The CLI uses the hosted client in
+[`crates/`](../crates/) for optional remote verification. Local verification
+runs through `agent/workflow` and the language-specific proof tools.
 
 ## Hosted verification
 

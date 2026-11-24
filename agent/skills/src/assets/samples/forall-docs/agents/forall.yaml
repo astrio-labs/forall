@@ -1,0 +1,5 @@
+interface:
+  display_name: "Forall docs"
+  short_description: "Forall product docs, install paths, CLI vs MCP, and public GitHub documentation"
+  icon_small: "./assets/openai-small.svg"
+  default_prompt: "Use Forall docs for questions about Forall install, CLI vs MCP verify-only, dashboard keys, project layout, workflow, and hosted verification."

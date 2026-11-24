@@ -1,0 +1,7 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5030
+expression: "format!(\"text:    {text}\\nmagenta: {magenta}\")"
+---
+text:    │▌ @sample plugin                      │
+magenta:    ^^^^^^^

@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/mod.rs
+assertion_line: 2381
+expression: "render_snapshot(&pane, area)"
+---
+• Working (0s • esc to interr…
+                              
+╭────────────────────────────╮
+│▌ Ask Forall to do anything │
+╰────────────────────────────╯
+             100% context left

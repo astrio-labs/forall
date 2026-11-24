@@ -1,0 +1,35 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-analytics"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_analytics"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-app-server-protocol = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-plugin = { workspace = true }
+forall-protocol = { workspace = true }
+forall-state = { workspace = true }
+os_info = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+] }
+tracing = { workspace = true, features = ["log"] }
+
+[dev-dependencies]
+forall-utils-absolute-path = { workspace = true }
+pretty_assertions = { workspace = true }

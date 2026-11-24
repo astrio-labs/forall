@@ -1,0 +1,35 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-goal-extension"
+version.workspace = true
+
+[lib]
+name = "forall_goal_extension"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-analytics = { workspace = true }
+forall-core = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-otel = { workspace = true }
+forall-protocol = { workspace = true }
+forall-state = { workspace = true }
+forall-tools = { workspace = true }
+forall-utils-template = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,45 @@
+[package]
+name = "forall-app-server-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "forall_app_server_protocol"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+forall-experimental-api-macros = { workspace = true }
+forall-protocol = { workspace = true }
+forall-shell-command = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+strum_macros = { workspace = true }
+thiserror = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
+ts-rs = { workspace = true }
+inventory = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+forall-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+similar = { workspace = true }
+tempfile = { workspace = true }

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/astrio-labs/forall-mcp">
+  <a href="https://github.com/astrio-labs/forall">
     <picture>
       <source srcset="assets/forall_bg.png">
       <img src="assets/forall_bg.png" alt="Forall Background">
@@ -46,20 +46,24 @@ produced, never by what was claimed.
 
 ## Two ways to use Forall
 
-### 1. Install Forall CLI
+### 1. Build the Forall CLI
 
-Full coding agent — specs, proofs, and workflow in your terminal.
+The terminal agent is derived from OpenAI Codex. It can edit your repository,
+author specs and contracts, and run local verification.
+
+On Linux, install the build dependencies and Bubblewrap for sandboxed commands
+before building. See the [platform prerequisites](docs/getting-started.md).
 
 ```bash
-curl -fsSL https://forall.astrio.app/install.sh | bash
-forall
+git clone https://github.com/astrio-labs/forall.git
+cd forall/agent
+cargo build --locked -p forall-cli --bin forall
+export PATH="$PWD/target/debug:$PATH"
 ```
 
-Add `~/.local/bin` to your `PATH` if needed, then run `forall --version`.
-
-On first launch, sign in with your [Forall account](https://forall.astrio.app) — your browser opens, no API key to paste. Chat on your plan's hosted models, or bring your own model API key (OpenAI, OpenRouter, Anthropic (Claude), Google Gemini, Azure OpenAI, or Claude via Amazon Bedrock). Then `forall init` in a git repo and start working.
-
-> **Note:** A binary release must exist on [GitHub Releases](https://github.com/astrio-labs/forall-mcp/releases) before install succeeds.
+In the Git project you want to work on, run `forall init` and then `forall`.
+Choose **Bring your own API key** to use your model provider. Run `forall check`
+to check the project locally. See the [build and proof-tool prerequisites](docs/getting-started.md).
 
 ### 2. MCP verify-only
 
@@ -109,7 +113,9 @@ We are expanding to more languages, and to filling in more of this table for the
 
 ## Telemetry
 
-First-party builds send product usage analytics — feature and reliability events, never your code or prompts. Opt out any time in `~/.forall/config.toml`:
+Product analytics require an explicitly configured ingest endpoint. To disable
+product analytics even when an endpoint has been configured, set the following
+in `~/.forall/config.toml`.
 
 ```toml
 [analytics]

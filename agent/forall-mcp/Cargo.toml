@@ -1,0 +1,46 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-mcp"
+version.workspace = true
+
+[lib]
+name = "forall_mcp"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arc-swap = { workspace = true }
+async-channel = { workspace = true }
+forall-async-utils = { workspace = true }
+forall-api = { workspace = true }
+forall-config = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-otel = { workspace = true }
+forall-plugin = { workspace = true }
+forall-protocol = { workspace = true }
+forall-rmcp-client = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+forall-utils-plugins = { workspace = true }
+futures = { workspace = true }
+regex-lite = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
+tempfile = { workspace = true }

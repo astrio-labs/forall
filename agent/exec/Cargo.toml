@@ -1,0 +1,77 @@
+[package]
+name = "forall-exec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+autotests = false
+
+[[bin]]
+name = "forall-exec"
+path = "src/main.rs"
+
+[lib]
+name = "forall_exec"
+path = "src/lib.rs"
+doctest = false
+
+[[test]]
+name = "all"
+path = "tests/all.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+forall-arg0 = { workspace = true }
+forall-app-server-client = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-config = { workspace = true }
+forall-core = { workspace = true }
+forall-feedback = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider-info = { workspace = true }
+forall-otel = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-cli = { workspace = true }
+forall-utils-oss = { workspace = true }
+forall-utils-sandbox-summary = { workspace = true }
+owo-colors = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+supports-color = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
+uuid = { workspace = true }
+
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+forall-apply-patch = { workspace = true }
+forall-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
+libc = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+uuid = { workspace = true }
+walkdir = { workspace = true }
+wiremock = { workspace = true }

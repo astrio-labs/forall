@@ -1,0 +1,46 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-core-skills"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_core_skills"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-analytics = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-config = { workspace = true }
+forall-context-fragments = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-otel = { workspace = true }
+forall-protocol = { workspace = true }
+forall-shell-command = { workspace = true }
+forall-skills = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-output-truncation = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+forall-utils-plugins = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+shlex = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

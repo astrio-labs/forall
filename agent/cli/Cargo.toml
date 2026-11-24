@@ -1,0 +1,105 @@
+[package]
+name = "forall-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "forall"
+path = "src/main.rs"
+
+[lib]
+name = "forall_cli"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+clap_complete = { workspace = true }
+forall-app-server = { workspace = true }
+forall-app-server-daemon = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-app-server-test-client = { workspace = true }
+forall-arg0 = { workspace = true }
+forall-agent-bridge = { workspace = true }
+forall-workflow = { workspace = true }
+forall-api = { workspace = true }
+forall-utils-cli = { workspace = true }
+forall-config = { workspace = true }
+forall-core = { workspace = true }
+forall-core-plugins = { workspace = true }
+forall-home = { workspace = true }
+forall-exec = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-execpolicy = { workspace = true }
+forall-features = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-install-context = { workspace = true }
+forall-login = { workspace = true }
+forall-memories-write = { workspace = true }
+forall-mcp = { workspace = true }
+forall-mcp-server = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-models-manager = { workspace = true }
+forall-plugin = { workspace = true }
+forall-protocol = { workspace = true }
+forall-responses-api-proxy = { workspace = true }
+forall-rmcp-client = { workspace = true }
+forall-rollout = { workspace = true }
+forall-rollout-trace = { workspace = true }
+forall-sandboxing = { workspace = true }
+forall-state = { workspace = true }
+forall-stdio-to-uds = { workspace = true }
+forall-terminal-detection = { workspace = true }
+forall-tui = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path = { workspace = true }
+crossterm = { workspace = true }
+http = { workspace = true }
+libc = { workspace = true }
+os_info = { workspace = true }
+owo-colors = { workspace = true }
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+supports-color = { workspace = true }
+sys-locale = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+unicode-segmentation = { workspace = true }
+url = { workspace = true }
+which = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+forall_windows_sandbox = { package = "forall-windows-sandbox", path = "../windows-sandbox-rs" }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
+forall-utils-cargo-bin = { workspace = true }
+insta = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+sqlx = { workspace = true }
+wiremock = { workspace = true }

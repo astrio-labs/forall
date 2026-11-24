@@ -1,0 +1,22 @@
+[package]
+name = "forall-feedback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-login = { workspace = true }
+forall-protocol = { workspace = true }
+sentry = { version = "0.46" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lib]
+doctest = false

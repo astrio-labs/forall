@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-guardian"
+version.workspace = true
+
+[lib]
+name = "forall_guardian"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-core = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-protocol = { workspace = true }

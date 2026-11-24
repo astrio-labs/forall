@@ -1,0 +1,55 @@
+name: CLI source build
+
+on:
+  push:
+    branches: [main]
+    paths: ['agent/**', 'crates/**', 'Cargo.toml', '.github/workflows/cli.yml']
+  pull_request:
+    paths: ['agent/**', 'crates/**', 'Cargo.toml', '.github/workflows/cli.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the Linux sandbox runtime
+        run: sudo apt-get install -y bubblewrap
+      - name: Build the CLI from the locked workspace
+        run: cargo build --locked -p forall-cli --bin forall
+      - name: Check the source checkout's LemmaScript installation
+        run: |
+          npm ci --prefix workflow
+          export FORALL_HOME="$RUNNER_TEMP/verifier-home"
+          mkdir -p "$FORALL_HOME"
+          target/debug/forall ensure-lsc --check-only --json | python3 -c 'import json, sys; assert json.load(sys.stdin)["ok"]'
+      - name: Initialize a project with the built executable
+        run: |
+          cli="$PWD/target/debug/forall"
+          export FORALL_HOME="$RUNNER_TEMP/forall-home"
+          mkdir -p "$FORALL_HOME"
+          git init "$RUNNER_TEMP/example"
+          cd "$RUNNER_TEMP/example"
+          "$cli" --version
+          "$cli" init
+          test -f .forall/markers.toml
+          "$cli" sandbox -- /bin/echo sandbox-ok
+      - name: Test the verification ledger and proof runner
+        run: cargo test --locked -p forall-workflow --lib 'verify::'
+      - name: Check passing and failing local properties
+        run: cargo test --locked -p forall-workflow --test workflow_extensions python_property_
+      - name: Test account transport and diagnostic dumps
+        run: |
+          cargo test --locked -p forall-login --lib default_client::tests::credential_
+          cargo test --locked -p forall-responses-api-proxy --lib dump::tests
+      - name: Exercise an editing turn with a local model fixture
+        run: cargo test --locked -p forall-exec --test all test_apply_patch_tool

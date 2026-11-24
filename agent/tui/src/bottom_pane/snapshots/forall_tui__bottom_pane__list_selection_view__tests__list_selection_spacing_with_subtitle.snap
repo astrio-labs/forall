@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 1561
+expression: render_lines(&view)
+---
+                                                
+  Select Approval Mode                          
+  Switch between Forall approval presets        
+                                                
+› 1. Read Only (current)  Forall can read       
+                          files                 
+  2. Full Access          Forall can edit       
+                          files                 
+                                                
+  Press enter to confirm or esc to go back

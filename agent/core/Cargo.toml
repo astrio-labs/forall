@@ -1,0 +1,179 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-core"
+version.workspace = true
+
+[lib]
+name = "forall_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "forall-write-config-schema"
+path = "src/bin/config_schema.rs"
+
+[[test]]
+name = "verified_gate"
+path = "tests/verified_gate.rs"
+harness = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arc-swap = { workspace = true }
+async-channel = { workspace = true }
+base64 = { workspace = true }
+bm25 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+forall-analytics = { workspace = true }
+forall-api = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-apply-patch = { workspace = true }
+forall-async-utils = { workspace = true }
+forall-code-mode = { workspace = true }
+forall-context-fragments = { workspace = true }
+forall-config = { workspace = true }
+forall-core-plugins = { workspace = true }
+forall-core-skills = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-features = { workspace = true }
+forall-agent-bridge = { workspace = true }
+forall-workflow = { workspace = true }
+forall-feedback = { workspace = true }
+forall-file-system = { workspace = true }
+forall-login = { workspace = true }
+forall-memories-read = { workspace = true }
+forall-mcp = { workspace = true }
+forall-model-provider-info = { workspace = true }
+forall-models-manager = { workspace = true }
+forall-shell-command = { workspace = true }
+forall-execpolicy = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-hosted-verify = { workspace = true }
+forall-hooks = { workspace = true }
+forall-install-context = { workspace = true }
+forall-network-proxy = { workspace = true }
+forall-otel = { workspace = true }
+forall-plugin = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-protocol = { workspace = true }
+forall-response-debug-context = { workspace = true }
+forall-prompts = { workspace = true }
+forall-rollout = { workspace = true }
+forall-rollout-trace = { workspace = true }
+forall-rmcp-client = { workspace = true }
+forall-sandboxing = { workspace = true }
+forall-state = { workspace = true }
+forall-terminal-detection = { workspace = true }
+forall-thread-store = { workspace = true }
+forall-tools = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-cache = { workspace = true }
+forall-utils-image = { workspace = true }
+forall-utils-home-dir = { workspace = true }
+forall-utils-output-truncation = { workspace = true }
+forall-utils-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+forall-utils-plugins = { workspace = true }
+forall-utils-pty = { workspace = true }
+forall-utils-string = { workspace = true }
+forall-utils-stream-parser = { workspace = true }
+forall-windows-sandbox = { package = "forall-windows-sandbox", path = "../windows-sandbox-rs" }
+csv = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+iana-time-zone = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "webp"] }
+indexmap = { workspace = true }
+libc = { workspace = true }
+once_cell = { workspace = true }
+rand = { workspace = true }
+regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+shlex = { workspace = true }
+similar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true, features = ["rt"] }
+tokio-tungstenite = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4", "v5"] }
+which = { workspace = true }
+whoami = { workspace = true }
+
+# Build OpenSSL from source when cross-compiling Linux (and for musl).
+[target.x86_64-unknown-linux-gnu.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.aarch64-unknown-linux-gnu.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.'cfg(unix)'.dependencies]
+forall-shell-escalation = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
+forall-image-generation-extension = { workspace = true }
+forall-home = { workspace = true }
+forall-otel = { workspace = true }
+forall-test-binary-support = { workspace = true }
+forall-utils-cargo-bin = { workspace = true }
+forall-web-search-extension = { workspace = true }
+core_test_support = { workspace = true }
+ctor = { workspace = true }
+insta = { workspace = true }
+maplit = { workspace = true }
+opentelemetry = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+test-case = "3.3.1"
+opentelemetry_sdk = { workspace = true, features = [
+    "experimental_metrics_custom_reader",
+    "metrics",
+] }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+test-log = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }
+walkdir = { workspace = true }
+wiremock = { workspace = true }
+zstd = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["openssl-sys"]
+ignored-paths = ["tests/remote_env_windows/*.rs"]

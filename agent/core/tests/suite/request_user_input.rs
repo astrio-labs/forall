@@ -1,0 +1,468 @@
+#![allow(clippy::unwrap_used)]
+
+use core_test_support::test_forall::local_selections;
+use std::collections::HashMap;
+
+use core_test_support::TempDirExt;
+use core_test_support::responses;
+use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_forall::TestForall;
+use core_test_support::test_forall::test_forall;
+use core_test_support::test_forall::turn_permission_fields;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
+use forall_features::Feature;
+use forall_protocol::config_types::CollaborationMode;
+use forall_protocol::config_types::ModeKind;
+use forall_protocol::config_types::Settings;
+use forall_protocol::models::PermissionProfile;
+use forall_protocol::protocol::AskForApproval;
+use forall_protocol::protocol::EventMsg;
+use forall_protocol::protocol::Op;
+use forall_protocol::request_user_input::RequestUserInputAnswer;
+use forall_protocol::request_user_input::RequestUserInputResponse;
+use forall_protocol::user_input::UserInput;
+use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
+use tokio::time::Duration;
+use tokio::time::timeout;
+
+fn call_output(req: &ResponsesRequest, call_id: &str) -> String {
+    let raw = req.function_call_output(call_id);
+    assert_eq!(
+        raw.get("call_id").and_then(Value::as_str),
+        Some(call_id),
+        "mismatched call_id in function_call_output"
+    );
+    let (content_opt, _success) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    content_opt.expect("function_call_output content present")
+}
+
+fn call_output_content_and_success(
+    req: &ResponsesRequest,
+    call_id: &str,
+) -> (String, Option<bool>) {
+    let raw = req.function_call_output(call_id);
+    assert_eq!(
+        raw.get("call_id").and_then(Value::as_str),
+        Some(call_id),
+        "mismatched call_id in function_call_output"
+    );
+    let (content_opt, success) = req
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output present");
+    let content = content_opt.expect("function_call_output content present");
+    (content, success)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Plan, /*auto_resolution_ms*/ None).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_emits_auto_resolution_ms() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Plan, Some(60_000)).await
+}
+
+async fn request_user_input_round_trip_for_mode(
+    mode: ModeKind,
+    auto_resolution_ms: Option<u64>,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let builder = test_forall();
+    let TestForall {
+        forall: codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder
+        .with_config(move |config| {
+            if mode == ModeKind::Default {
+                config
+                    .features
+                    .enable(Feature::DefaultModeRequestUserInput)
+                    .expect("test config should allow feature update");
+            }
+        })
+        .build(&server)
+        .await?;
+
+    let call_id = "user-input-call";
+    let mut request_args = json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the approach."
+            }]
+        }]
+    });
+    if let Some(auto_resolution_ms) = auto_resolution_ms {
+        let request_args = request_args
+            .as_object_mut()
+            .expect("request_user_input args should be a JSON object");
+        request_args.insert("autoResolutionMs".to_string(), json!(auto_resolution_ms));
+    }
+    let request_args = request_args.to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "request_user_input", &request_args),
+        ev_rate_limits(),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "thanks"),
+        ev_completed("resp-2"),
+    ]);
+    let second_mock = responses::mount_sse_once(&server, second_response).await;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please confirm".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: forall_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(cwd.abs())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(CollaborationMode {
+                    mode,
+                    settings: Settings {
+                        model: session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let request = wait_for_event_match(&codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.call_id, call_id);
+    assert_eq!(request.questions.len(), 1);
+    assert_eq!(request.auto_resolution_ms, auto_resolution_ms);
+    assert_eq!(request.questions[0].is_other, true);
+    assert!(
+        timeout(Duration::from_millis(200), async {
+            loop {
+                let event = codex
+                    .next_event()
+                    .await
+                    .expect("event stream should stay open");
+                if matches!(event.msg, EventMsg::TokenCount(_)) {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_err(),
+        "TokenCount should wait until request_user_input resolves"
+    );
+
+    let mut answers = HashMap::new();
+    answers.insert(
+        "confirm_path".to_string(),
+        RequestUserInputAnswer {
+            answers: vec!["yes".to_string()],
+        },
+    );
+    let response = RequestUserInputResponse { answers };
+    codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id.clone(),
+            response,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TokenCount(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let req = second_mock.single_request();
+    let output_text = call_output(&req, call_id);
+    let output_json: Value = serde_json::from_str(&output_text)?;
+    assert_eq!(
+        output_json,
+        json!({
+            "answers": {
+                "confirm_path": { "answers": ["yes"] }
+            }
+        })
+    );
+
+    Ok(())
+}
+
+fn ev_rate_limits() -> Value {
+    json!({
+        "type": "codex.rate_limits",
+        "plan_type": "plus",
+        "rate_limits": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary": {
+                "used_percent": 42,
+                "window_minutes": 60,
+                "reset_at": 1700000000
+            },
+            "secondary": null
+        },
+        "code_review_rate_limits": null,
+        "credits": null,
+        "promo": null
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_interrupt_emits_deferred_token_count() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let TestForall {
+        forall: codex,
+        cwd,
+        session_configured,
+        ..
+    } = test_forall().build(&server).await?;
+
+    let call_id = "user-input-interrupt";
+    let request_args = json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the approach."
+            }]
+        }]
+    })
+    .to_string();
+
+    let response = sse(vec![
+        ev_response_created("resp-interrupt"),
+        ev_function_call(call_id, "request_user_input", &request_args),
+        ev_completed_with_tokens("resp-interrupt", /*total_tokens*/ 77),
+    ]);
+    responses::mount_sse_once(&server, response).await;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please confirm".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: forall_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(cwd.abs())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    settings: Settings {
+                        model: session_configured.model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let request = wait_for_event_match(&codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+
+    codex.submit(Op::Interrupt).await?;
+
+    let token_count = wait_for_event_match(&codex, |event| match event {
+        EventMsg::TokenCount(token_count) => Some(token_count.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        token_count
+            .info
+            .map(|info| info.total_token_usage.total_tokens),
+        Some(77)
+    );
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnAborted(_))).await;
+
+    assert_eq!(request.call_id, call_id);
+    Ok(())
+}
+
+async fn assert_request_user_input_rejected<F>(mode_name: &str, build_mode: F) -> anyhow::Result<()>
+where
+    F: FnOnce(String) -> CollaborationMode,
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_forall();
+    let TestForall {
+        forall: codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let mode_slug = mode_name.to_lowercase().replace(' ', "-");
+    let call_id = format!("user-input-{mode_slug}-call");
+    let request_args = json!({
+        "questions": [{
+            "id": "confirm_path",
+            "header": "Confirm",
+            "question": "Proceed with the plan?",
+            "options": [{
+                "label": "Yes (Recommended)",
+                "description": "Continue the current plan."
+            }, {
+                "label": "No",
+                "description": "Stop and revisit the approach."
+            }]
+        }]
+    })
+    .to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(&call_id, "request_user_input", &request_args),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "thanks"),
+        ev_completed("resp-2"),
+    ]);
+    let second_mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+    let collaboration_mode = build_mode(session_model.clone());
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please confirm".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: forall_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(cwd.abs())),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(collaboration_mode),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let req = second_mock.single_request();
+    let (output, success) = call_output_content_and_success(&req, &call_id);
+    assert_eq!(success, None);
+    assert_eq!(
+        output,
+        format!("request_user_input is unavailable in {mode_name} mode")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Execute", |model| CollaborationMode {
+        mode: ModeKind::Execute,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Default", |model| CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Default, /*auto_resolution_ms*/ None).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_pair_mode_alias() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Pair Programming", |model| CollaborationMode {
+        mode: ModeKind::PairProgramming,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}

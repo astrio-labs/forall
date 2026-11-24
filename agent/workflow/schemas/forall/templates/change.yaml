@@ -1,0 +1,3 @@
+# standard | micro
+# micro: proposal + specs + tasks only (skips design and verification)
+class: standard

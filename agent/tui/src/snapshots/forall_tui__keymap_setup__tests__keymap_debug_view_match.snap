@@ -1,0 +1,15 @@
+---
+source: tui/src/keymap_setup.rs
+assertion_line: 1381
+expression: rendered
+---
+Keypress Inspector
+Press any key to see what Forall receives. Esc is inspected; Ctrl+C closes.
+Tip: Forall can only inspect keys your terminal sends.
+
+Detected: ctrl + o
+Config key: ctrl-o
+Raw event: code=Char('o'), modifiers=ctrl, kind=Press
+
+Assigned actions:
+  - global.copy (Copy) - Copy the last agent response to the clipboard. [Default]
