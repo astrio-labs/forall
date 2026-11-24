@@ -76,8 +76,7 @@ pub fn resolve_lsc_command() -> (String, Vec<String>) {
         }
     }
 
-    let forall_script = lsc_install::forall_lsc_script();
-    if forall_script.is_file() {
+    if let Some(forall_script) = lsc_install::available_npm_script() {
         let node = env::var("NODE").unwrap_or_else(|_| "node".to_string());
         return (node, vec![forall_script.display().to_string()]);
     }

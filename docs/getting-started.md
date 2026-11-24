@@ -31,7 +31,8 @@ non-interactive session.
 
 Run `forall check` from the initialized project. For TypeScript contracts,
 install Node.js and the workflow's JavaScript dependencies with `npm ci` in
-`agent/workflow/` in the source checkout. LemmaScript uses Dafny for proofs.
+`agent/workflow/` in the source checkout. Keep that checkout in place because the CLI also loads
+its property-test runners from it. LemmaScript uses Dafny for proofs.
 Other languages use their corresponding verification tools, including Verus
 for Rust, OpenJML for Java, and Frama-C for C.
 

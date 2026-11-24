@@ -28,8 +28,11 @@ pub fn forall_lsc_install_root() -> PathBuf {
 }
 
 pub fn forall_lsc_script() -> PathBuf {
-    forall_lsc_install_root()
-        .join("node_modules")
+    npm_lsc_script(&forall_lsc_install_root())
+}
+
+fn npm_lsc_script(root: &Path) -> PathBuf {
+    root.join("node_modules")
         .join("lemmascript")
         .join("tools")
         .join("dist")
@@ -86,16 +89,19 @@ pub fn configured_lsc_override() -> Option<String> {
 /// the managed install root instead would report "unavailable" while
 /// [`super::lemmascript::resolve_lsc_command`] happily runs the override.
 ///
-/// For the managed install both halves are required. The entry script alone
-/// was accepted before, which meant a half-unpacked install reported
-/// "available" and was then handed work it could not do. Requiring the
-/// manifest to parse as well is the closest thing to a liveness probe
-/// available for a tool with no version flag.
+/// The managed install and the source checkout both need a script and a readable manifest.
 pub fn lsc_is_available() -> bool {
-    if configured_lsc_override().is_some() {
-        return true;
-    }
-    forall_lsc_script().is_file() && installed_lsc_version().is_some()
+    configured_lsc_override().is_some() || available_npm_script().is_some()
+}
+
+pub(super) fn available_npm_script() -> Option<PathBuf> {
+    let managed = forall_lsc_install_root();
+    [managed.as_path(), Path::new(env!("CARGO_MANIFEST_DIR"))]
+        .into_iter()
+        .find_map(|root| {
+            let script = npm_lsc_script(root);
+            (script.is_file() && installed_lsc_version_at(root).is_some()).then_some(script)
+        })
 }
 
 /// Toolchain identity for the ledger and for certificates.
@@ -115,7 +121,10 @@ pub fn lsc_is_available() -> bool {
 /// the same defect as the constant, one step removed.
 pub fn lsc_version_check() -> Option<String> {
     let script = resolved_lsc_script()?;
-    Some(format!("lemmascript@{}", lemmascript_version_near(&script)?))
+    Some(format!(
+        "lemmascript@{}",
+        lemmascript_version_near(&script)?
+    ))
 }
 
 /// The script that the resolved `lsc` command will execute.
@@ -292,8 +301,8 @@ pub fn ensure_lsc_toolchain(allow_download: bool, quiet: bool) -> EnsureLscResul
             already_installed: true,
             installed: false,
             version: lsc_version_check(),
-            script_path: Some(forall_lsc_script()),
-            wrapper_path: Some(forall_lsc_wrapper()),
+            script_path: resolved_lsc_script(),
+            wrapper_path: Some(forall_lsc_wrapper()).filter(|path| path.is_file()),
             message: "LemmaScript already available".to_string(),
         };
     }
@@ -475,8 +484,10 @@ mod tests {
     /// signed certificate that did not produce the verdict.
     #[test]
     fn the_version_comes_from_the_package_that_owns_the_script() {
-        let (_guard, script) =
-            checkout_with("lemmascript", Some(r#"{"name":"lemmascript","version":"1.2.3"}"#));
+        let (_guard, script) = checkout_with(
+            "lemmascript",
+            Some(r#"{"name":"lemmascript","version":"1.2.3"}"#),
+        );
         assert_eq!(
             lemmascript_version_near(&script).as_deref(),
             Some("1.2.3"),

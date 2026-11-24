@@ -24,6 +24,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Build the CLI from the locked workspace
         run: cargo build --locked -p forall-cli --bin forall
+      - name: Check the source checkout's LemmaScript installation
+        run: |
+          npm ci --prefix workflow
+          export FORALL_HOME="$RUNNER_TEMP/verifier-home"
+          mkdir -p "$FORALL_HOME"
+          target/debug/forall ensure-lsc --check-only --json | python3 -c 'import json, sys; assert json.load(sys.stdin)["ok"]'
       - name: Initialize a project with the built executable
         run: |
           cli="$PWD/target/debug/forall"
