@@ -20,6 +20,7 @@ forall-otel = { workspace = true }
 forall-protocol = { workspace = true }
 forall-secrets = { workspace = true }
 forall-terminal-detection = { workspace = true }
+forall-utils-home-dir = { workspace = true }
 forall-utils-template = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
@@ -40,7 +41,6 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
-dotenvy = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]

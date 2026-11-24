@@ -8,6 +8,7 @@ use forall_apply_patch::FORALL_CORE_APPLY_PATCH_ARG1;
 use forall_exec_server::FORALL_FS_HELPER_ARG1;
 use forall_install_context::InstallContext;
 use forall_sandboxing::landlock::FORALL_LINUX_SANDBOX_ARG0;
+use forall_utils_home_dir::dotenv_entries;
 use forall_utils_home_dir::find_forall_home;
 #[cfg(target_os = "windows")]
 use forall_windows_sandbox::FORALL_WINDOWS_SANDBOX_ARG1;
@@ -297,24 +298,16 @@ const RESERVED_DOTENV_KEY_PREFIXES: [&str; 2] = ["CODEX_", "FORALL_"];
 /// Security: Do not allow `.env` files to create or modify reserved internal
 /// variables with names starting with `CODEX_` or `FORALL_`.
 fn load_dotenv() {
-    if let Ok(forall_home) = find_forall_home()
-        && let Ok(iter) = dotenvy::from_path_iter(forall_home.join(".env"))
-    {
-        set_filtered(iter);
+    if let Ok(forall_home) = find_forall_home() {
+        set_filtered(&forall_home.join(".env"));
     }
-    if let Ok(cwd) = std::env::current_dir()
-        && let Ok(iter) = dotenvy::from_path_iter(cwd.join(".env"))
-    {
-        set_filtered(iter);
+    if let Ok(cwd) = std::env::current_dir() {
+        set_filtered(&cwd.join(".env"));
     }
 }
 
-/// Helper to set vars from a dotenvy iterator while filtering reserved keys.
-fn set_filtered<I>(iter: I)
-where
-    I: IntoIterator<Item = Result<(String, String), dotenvy::Error>>,
-{
-    for (key, value) in iter.into_iter().flatten() {
+fn set_filtered(path: &Path) {
+    for (key, value) in dotenv_entries(path) {
         let upper = key.to_ascii_uppercase();
         if !RESERVED_DOTENV_KEY_PREFIXES
             .iter()

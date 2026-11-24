@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 forall-utils-absolute-path = { workspace = true }
 dirs = { workspace = true }
+dotenvy = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

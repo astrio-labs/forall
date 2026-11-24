@@ -1,6 +1,22 @@
 use dirs::home_dir;
 use forall_utils_absolute_path::AbsolutePathBuf;
+use std::path::Path;
 use std::path::PathBuf;
+
+/// Read assignments from a regular dotenv file, skipping malformed entries.
+pub fn dotenv_entries(path: &Path) -> impl Iterator<Item = (String, String)> {
+    let entries = if path.is_file() {
+        dotenvy::from_path_iter(path).ok()
+    } else {
+        None
+    };
+    entries
+        .into_iter()
+        .flatten()
+        // dotenvy can yield the same read error indefinitely.
+        .take_while(|entry| !matches!(entry, Err(dotenvy::Error::Io(_))))
+        .filter_map(Result::ok)
+}
 
 /// Returns the path to the Forall configuration directory.
 ///
@@ -83,6 +99,7 @@ pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::dotenv_entries;
     use super::find_forall_home_from_env;
     use super::resolve_home_from_env;
     use forall_utils_absolute_path::AbsolutePathBuf;
@@ -90,6 +107,30 @@ mod tests {
     use std::fs;
     use std::io::ErrorKind;
     use tempfile::TempDir;
+
+    #[test]
+    fn dotenv_directory_is_ignored() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let path = temp.path().join(".env");
+        fs::create_dir(&path)?;
+        assert_eq!(dotenv_entries(&path).next(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn dotenv_entries_keep_valid_assignments_after_a_malformed_line() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let path = temp.path().join(".env");
+        fs::write(&path, "FIRST=one\ninvalid line\nSECOND=two\n")?;
+        assert_eq!(
+            dotenv_entries(&path).collect::<Vec<_>>(),
+            vec![
+                ("FIRST".to_string(), "one".to_string()),
+                ("SECOND".to_string(), "two".to_string())
+            ]
+        );
+        Ok(())
+    }
 
     #[test]
     fn find_forall_home_env_missing_path_is_fatal() {

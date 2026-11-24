@@ -3727,7 +3727,6 @@ name = "forall-arg0"
 version = "0.5.0"
 dependencies = [
  "anyhow",
- "dotenvy",
  "forall-apply-patch",
  "forall-exec-server",
  "forall-install-context",
@@ -4600,7 +4599,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "core_test_support",
- "dotenvy",
  "forall-app-server-protocol",
  "forall-client",
  "forall-config",
@@ -4610,6 +4608,7 @@ dependencies = [
  "forall-protocol",
  "forall-secrets",
  "forall-terminal-detection",
+ "forall-utils-home-dir",
  "forall-utils-template",
  "jsonwebtoken",
  "keyring",
@@ -5538,6 +5537,7 @@ name = "forall-utils-home-dir"
 version = "0.5.0"
 dependencies = [
  "dirs",
+ "dotenvy",
  "forall-utils-absolute-path",
  "pretty_assertions",
  "tempfile",

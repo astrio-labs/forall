@@ -783,10 +783,7 @@ pub fn read_provider_key_from_env_files(
         candidates.push(cwd.join(".env"));
     }
     for path in candidates {
-        let Ok(iter) = dotenvy::from_path_iter(&path) else {
-            continue;
-        };
-        for (key, value) in iter.flatten() {
+        for (key, value) in forall_utils_home_dir::dotenv_entries(&path) {
             if key == env_key && !value.trim().is_empty() {
                 return Some(value.trim().to_string());
             }
@@ -796,10 +793,7 @@ pub fn read_provider_key_from_env_files(
 }
 
 fn load_env_file_if_present(path: &Path) {
-    let Ok(iter) = dotenvy::from_path_iter(path) else {
-        return;
-    };
-    for (key, value) in iter.flatten() {
+    for (key, value) in forall_utils_home_dir::dotenv_entries(path) {
         if key.to_ascii_uppercase().starts_with("CODEX_") {
             continue;
         }
