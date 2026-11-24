@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "OauthSignInProvider": {
+      "description": "Identity provider for a managed Forall OAuth login. Omitted means the auth service's default (Google).",
+      "enum": [
+        "google",
+        "github"
+      ],
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "apiKey": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "apiKey"
+          ],
+          "title": "ApiKeyv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "apiKey",
+        "type"
+      ],
+      "title": "ApiKeyv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "description": "Start a managed Forall OAuth login (browser PKCE loopback flow).",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OauthSignInProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Identity provider to sign in with; absent uses the default."
+        },
+        "type": {
+          "enum": [
+            "oauth"
+          ],
+          "title": "Oauthv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Oauthv2::LoginAccountParams",
+      "type": "object"
+    }
+  ],
+  "title": "LoginAccountParams"
+}

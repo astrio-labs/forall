@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 690
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                        "
+"╭──────────────────────────────────────╮"
+"╰──────────────────────────────────────╯"

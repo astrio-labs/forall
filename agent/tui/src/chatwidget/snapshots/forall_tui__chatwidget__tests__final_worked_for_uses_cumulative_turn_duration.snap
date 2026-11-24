@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 698
+expression: combined
+---
+• Ran echo preparing
+  └ preparing
+
+────────────────────────────────────────────────────────────────────────────────
+
+• Final response.
+
+─ Worked for 2m 05s ────────────────────────────────────────────────────────────

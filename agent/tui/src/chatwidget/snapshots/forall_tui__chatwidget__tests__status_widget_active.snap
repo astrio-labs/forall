@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 776
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"• Analyzing (0s • esc to interrupt)                                             "
+"                                                                                "
+"                                                             gpt-5.6-sol default"
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│▌ Ask Forall to do anything                                                   │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"? for shortcuts                                                100% context left"

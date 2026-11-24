@@ -22,7 +22,7 @@ while IFS= read -r file; do
     fi
   done < <(grep -oE '\]\([^)]+\)' "$file" | sed -E 's/^\]\(|\)$//g' || true)
 done < <(
-  find . \
-    \( -path './.git' -o -path './target' -o -path './packages/*/node_modules' \) -prune \
-    -o -type f -name '*.md' -print | sort
+  # The agent workspace embeds upstream documentation, prompts, and Markdown fixtures.
+  git ls-files -- '*.md' ':!agent/**'
+  git ls-files -- agent/app-server-daemon/README.md
 )

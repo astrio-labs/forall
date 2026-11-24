@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 1077
+expression: "format!(\"before completion:\\n{before_completion}after completion:\\n{}\",\nactive_hook_blob(&chat))"
+---
+before completion:
+• Running PostToolUse hook
+after completion:
+<empty>

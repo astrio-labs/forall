@@ -1,0 +1,2523 @@
+use super::*;
+use forall_app_server_protocol::HookErrorInfo;
+use forall_app_server_protocol::HooksListEntry;
+use forall_app_server_protocol::HooksListResponse;
+use forall_app_server_protocol::MarketplaceLoadErrorInfo;
+use forall_app_server_protocol::MarketplaceRemoveResponse;
+use forall_app_server_protocol::PluginAvailability;
+use forall_app_server_protocol::PluginShareContext;
+use forall_app_server_protocol::PluginShareDiscoverability;
+use forall_app_server_protocol::PluginSource;
+use forall_features::Stage;
+use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn experimental_mode_plan_is_ignored_on_startup() {
+    let forall_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .forall_home(forall_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "features.collaboration_modes".to_string(),
+                TomlValue::Boolean(true),
+            ),
+            (
+                "tui.experimental_mode".to_string(),
+                TomlValue::String("plan".to_string()),
+            ),
+        ])
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = get_model_offline_for_tests(cfg.model.as_deref());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        has_chatgpt_account: false,
+        has_forall_backend_auth: false,
+        model_catalog: test_model_catalog(&cfg),
+        feedback: forall_feedback::ForallFeedback::new(),
+        is_first_run: true,
+        status_account_display: None,
+        runtime_model_provider_base_url: None,
+        initial_plan_type: None,
+        model: Some(resolved_model.clone()),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+    };
+
+    let chat = ChatWidget::new_with_app_event(init);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), resolved_model);
+}
+
+#[tokio::test]
+async fn plugins_popup_loading_state_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    chat.add_plugins_output();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Loading available plugins..."),
+        "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
+    );
+    assert_chatwidget_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn marketplace_upgrade_loading_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    chat.open_marketplace_upgrade_loading_popup(Some("debug"));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let upgrade_lines = popup
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("Upgrading"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    insta::assert_snapshot!(
+        upgrade_lines,
+        @"Upgrading debug marketplace... | ›    Upgrading debug marketplace...  This updates when marketplace upgrade completes."
+    );
+}
+
+#[tokio::test]
+async fn marketplace_upgrade_failure_includes_backend_messages_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    let cwd = chat.config.cwd.clone();
+
+    chat.on_marketplace_upgrade_loaded(
+        cwd.to_path_buf(),
+        Ok(MarketplaceUpgradeResponse {
+            selected_marketplaces: vec!["debug".to_string(), "tools".to_string()],
+            upgraded_roots: Vec::new(),
+            errors: vec![
+                MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "debug".to_string(),
+                    message: "git ls-remote marketplace source failed with status 128: authentication failed".to_string(),
+                },
+                MarketplaceUpgradeErrorInfo {
+                    marketplace_name: "tools".to_string(),
+                    message: "failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest".to_string(),
+                },
+            ],
+        }),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(
+        rendered.trim(),
+        @"■ Failed to upgrade 2 marketplaces: debug: git ls-remote marketplace source failed with status 128: authentication failed; tools: failed to validate upgraded marketplace root: marketplace root does not contain a supported manifest"
+    );
+}
+
+#[tokio::test]
+async fn hooks_popup_shows_list_diagnostics() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.clone();
+
+    chat.on_hooks_loaded(
+        cwd.to_path_buf(),
+        Ok(HooksListResponse {
+            data: vec![HooksListEntry {
+                cwd: cwd.to_path_buf(),
+                hooks: Vec::new(),
+                warnings: vec!["skipped invalid matcher for PreToolUse".to_string()],
+                errors: vec![HookErrorInfo {
+                    path: test_path_buf("/tmp/hooks.json"),
+                    message: "failed to parse hooks config".to_string(),
+                }],
+            }],
+        }),
+    );
+
+    let popup = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 112));
+    assert_chatwidget_snapshot!("hooks_popup_shows_list_diagnostics", popup);
+}
+
+#[tokio::test]
+async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_name() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![
+        plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-bravo",
+                "bravo",
+                Some("Bravo Search"),
+                Some("Search docs and tickets."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-alpha",
+                "alpha",
+                Some("Alpha Sync"),
+                Some("Already installed but disabled."),
+                /*installed*/ true,
+                /*enabled*/ false,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-starter",
+                "starter",
+                Some("Starter"),
+                Some("Included by default."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::InstalledByDefault,
+            ),
+        ]),
+        plugins_test_repo_marketplace(vec![plugins_test_summary(
+            "plugin-hidden",
+            "hidden",
+            Some("Hidden Repo Plugin"),
+            Some("Should not be shown in /plugins."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )]),
+    ]);
+    render_loaded_plugins_popup(&mut chat, response);
+    let popup = render_bottom_popup(&chat, /*width*/ 320);
+    assert_chatwidget_snapshot!("plugins_popup_curated_marketplace", popup);
+    assert!(
+        popup.contains("Hidden Repo Plugin"),
+        "expected /plugins to include non-curated marketplaces, got:\n{popup}"
+    );
+    assert!(
+        plugins_test_popup_row_position(&popup, "Alpha Sync")
+            < plugins_test_popup_row_position(&popup, "Bravo Search")
+            && plugins_test_popup_row_position(&popup, "Bravo Search")
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+                < plugins_test_popup_row_position(&popup, "Starter"),
+        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_keeps_loaded_marketplace_state_with_load_errors() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let mut response = plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]);
+    response
+        .marketplace_load_errors
+        .push(MarketplaceLoadErrorInfo {
+            marketplace_path: plugins_test_absolute_path("marketplaces/broken"),
+            message: "failed to load marketplace manifest".to_string(),
+        });
+
+    let popup = render_loaded_plugins_popup(&mut chat, response);
+    assert!(
+        popup.contains("No marketplace plugins available")
+            && !popup.contains("Marketplace unavailable"),
+        "expected /plugins to keep the loaded marketplace state, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_truncates_long_descriptions_in_list_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-alpha",
+            "alpha",
+            Some("Alpha"),
+            Some("Short description."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-verbose",
+            "verbose",
+            Some("Verbose Plugin"),
+            Some("This description keeps going and going until the row would normally wrap."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.on_plugins_loaded(cwd, Ok(response));
+    chat.add_plugins_output();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 70);
+    let verbose_row = popup
+        .lines()
+        .find(|line| line.contains("Verbose Plugin"))
+        .expect("expected verbose plugin row in popup");
+    insta::assert_snapshot!(
+        verbose_row,
+        @"  [-] Verbose Plugin  Available · Curated · This description keeps …"
+    );
+    assert!(
+        !popup
+            .contains("This description keeps going and going until the row would normally wrap."),
+        "expected the long plugin description to truncate instead of wrapping, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_add_marketplace_tab_opens_prompt_and_submits_source() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    let popup = select_plugins_tab_containing(
+        &mut chat,
+        /*width*/ 100,
+        "Add a marketplace from a Git repo or local root.",
+    );
+    assert!(
+        popup.contains("Add a marketplace from a Git repo or local root."),
+        "expected Add marketplace tab, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceAddPrompt) => {}
+        other => panic!("expected OpenMarketplaceAddPrompt event, got {other:?}"),
+    }
+
+    chat.open_marketplace_add_prompt();
+    let prompt = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        prompt.contains("owner/repo, git URL, or local marketplace path"),
+        "expected marketplace source prompt, got:\n{prompt}"
+    );
+
+    chat.handle_paste("owner/repo".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceAddLoading { source }) => {
+            assert_eq!(source, "owner/repo");
+        }
+        other => panic!("expected OpenMarketplaceAddLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceAdd {
+            cwd: event_cwd,
+            source,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(source, "owner/repo");
+        }
+        other => panic!("expected FetchMarketplaceAdd event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace_tab() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-debug",
+                "debug",
+                Some("Debug Plugin"),
+                Some("Debug marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    let popup = select_plugins_tab_containing(&mut chat, /*width*/ 100, "Repo Marketplace.");
+    assert!(
+        popup.contains("Repo Marketplace.")
+            && popup.contains("ctrl + u upgrade")
+            && popup.contains("ctrl + r remove")
+            && popup.contains("Debug Plugin"),
+        "expected upgradeable user-configured marketplace tab, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceUpgradeLoading { marketplace_name }) => {
+            assert_eq!(marketplace_name, Some("repo".to_string()));
+        }
+        other => panic!("expected OpenMarketplaceUpgradeLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceUpgrade {
+            cwd: event_cwd,
+            marketplace_name,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(marketplace_name, Some("repo".to_string()));
+        }
+        other => panic!("expected FetchMarketplaceUpgrade event, got {other:?}"),
+    }
+    let no_more_events = rx.try_recv();
+    assert!(
+        no_more_events.is_err(),
+        "expected no duplicate marketplace upgrade events, got {no_more_events:?}"
+    );
+}
+
+#[tokio::test]
+async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    let marketplace_root = plugins_test_absolute_path("marketplaces/debug");
+    let marketplace_path =
+        plugins_test_absolute_path("marketplaces/debug/.agents/plugins/marketplace.json");
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.debug]\nsource_type = \"git\"\nsource = \"https://github.com/owner/debug.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
+    );
+    chat.open_marketplace_add_loading_popup("owner/repo");
+    let loading_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        !loading_popup.contains("owner/repo"),
+        "expected marketplace loading popup to avoid echoing the source, got:\n{loading_popup}"
+    );
+    chat.on_marketplace_add_loaded(
+        cwd.clone(),
+        "owner/repo".to_string(),
+        Ok(MarketplaceAddResponse {
+            marketplace_name: "debug".to_string(),
+            installed_root: marketplace_root,
+            already_added: false,
+        }),
+    );
+    chat.on_plugins_loaded(
+        cwd,
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            PluginMarketplaceEntry {
+                name: "debug".to_string(),
+                path: Some(marketplace_path),
+                interface: Some(MarketplaceInterface {
+                    display_name: Some("Debug Marketplace".to_string()),
+                }),
+                plugins: vec![plugins_test_summary(
+                    "plugin-debug",
+                    "debug",
+                    Some("Debug Plugin"),
+                    Some("Debug marketplace plugin."),
+                    /*installed*/ false,
+                    /*enabled*/ true,
+                    PluginInstallPolicy::Available,
+                )],
+            },
+        ])),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugins_popup_newly_installed_marketplace", popup);
+    assert!(
+        popup.contains("Debug Marketplace installed successfully.")
+            && popup.contains("ctrl + u upgrade")
+            && popup.contains("ctrl + r remove")
+            && popup.contains("Debug Plugin"),
+        "expected marketplace add refresh to switch to the new marketplace tab, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    chat.add_plugins_output();
+    let reopened_popup = (0..8)
+        .find_map(|_| {
+            let popup = render_bottom_popup(&chat, /*width*/ 100);
+            if popup.contains("[Debug Marketplace]") {
+                Some(popup)
+            } else {
+                chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            let popup = render_bottom_popup(&chat, /*width*/ 100);
+            panic!("expected Debug Marketplace tab after reopening, got:\n{popup}");
+        });
+    assert!(
+        reopened_popup.contains("Installed 0 of 1 Debug Marketplace plugins.")
+            && !reopened_popup.contains("installed successfully"),
+        "expected reopening the marketplace tab later to use the normal header, got:\n{reopened_popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_removes_user_configured_marketplace_flow() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    let cwd = chat.config.cwd.to_path_buf();
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    chat.config.config_layer_stack = ConfigLayerStack::default().with_user_config(
+        &config_toml_path,
+        toml::from_str::<TomlValue>(
+            "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
+        )
+        .expect("marketplace config"),
+    );
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-debug",
+                "debug",
+                Some("Debug Plugin"),
+                Some("Debug marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+    while rx.try_recv().is_ok() {}
+
+    let repo_tab =
+        select_plugins_tab_containing(&mut chat, /*width*/ 100, "Repo Marketplace.");
+    assert!(
+        repo_tab.contains("Repo Marketplace.")
+            && repo_tab.contains("ctrl + u upgrade")
+            && repo_tab.contains("ctrl + r remove")
+            && repo_tab.contains("Debug Plugin"),
+        "expected removable user-configured marketplace tab, got:\n{repo_tab}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    let confirmation = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        confirmation.contains("Remove Repo Marketplace marketplace?")
+            && confirmation.contains("Remove marketplace")
+            && confirmation.contains("Back to plugins"),
+        "expected marketplace removal confirmation, got:\n{confirmation}"
+    );
+    assert_chatwidget_snapshot!(
+        "plugins_popup_marketplace_remove_confirmation",
+        confirmation
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let marketplace_display_name = match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceRemoveLoading {
+            marketplace_display_name,
+        }) => marketplace_display_name,
+        other => panic!("expected OpenMarketplaceRemoveLoading event, got {other:?}"),
+    };
+    assert_eq!(marketplace_display_name, "Repo Marketplace");
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceRemove {
+            cwd: event_cwd,
+            marketplace_name,
+            marketplace_display_name,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(marketplace_name, "repo");
+            assert_eq!(marketplace_display_name, "Repo Marketplace");
+        }
+        other => panic!("expected FetchMarketplaceRemove event, got {other:?}"),
+    }
+
+    chat.open_marketplace_remove_loading_popup(&marketplace_display_name);
+    let loading = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        loading.contains("Removing Repo Marketplace...")
+            && loading.contains("Removing marketplace..."),
+        "expected marketplace removal loading state, got:\n{loading}"
+    );
+
+    chat.on_marketplace_remove_loaded(
+        cwd.clone(),
+        "repo".to_string(),
+        marketplace_display_name,
+        Ok(MarketplaceRemoveResponse {
+            marketplace_name: "repo".to_string(),
+            installed_root: Some(plugins_test_absolute_path("marketplaces/repo")),
+        }),
+    );
+    chat.on_plugins_loaded(
+        cwd,
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+
+    let refreshed = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        refreshed.contains("Browse plugins from available marketplaces.")
+            && !refreshed.contains("Repo Marketplace")
+            && !refreshed.contains("Debug Plugin")
+            && !refreshed.contains("ctrl + r remove"),
+        "expected refreshed plugin list without removed marketplace, got:\n{refreshed}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_snapshot_labels_personal_marketplace_as_local() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let marketplace_name = "personal-marketplace";
+    let personal_marketplace_path = AbsolutePathBuf::try_from(
+        dirs::home_dir()
+            .expect("home directory")
+            .join(".agents/plugins/marketplace.json"),
+    )
+    .expect("absolute personal marketplace path");
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        /*installed*/ false,
+        /*enabled*/ true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![PluginMarketplaceEntry {
+        name: marketplace_name.to_string(),
+        path: Some(personal_marketplace_path.clone()),
+        interface: None,
+        plugins: vec![summary.clone()],
+    }]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let mut plugin = plugins_test_detail(
+        summary,
+        Some("Turn Figma files into implementation context."),
+        &["design-review", "extract-copy"],
+        &[
+            (forall_app_server_protocol::HookEventName::PreToolUse, 1),
+            (forall_app_server_protocol::HookEventName::Stop, 2),
+        ],
+        &["figma-mcp", "docs-mcp"],
+    );
+    plugin.marketplace_name = marketplace_name.to_string();
+    plugin.marketplace_path = Some(personal_marketplace_path);
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_installable",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        /*installed*/ true,
+        /*enabled*/ true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(
+                summary,
+                Some("Turn Figma files into implementation context."),
+                &["design-review", "extract-copy"],
+                &[
+                    (forall_app_server_protocol::HookEventName::PreToolUse, 1),
+                    (forall_app_server_protocol::HookEventName::Stop, 2),
+                ],
+                &["figma-mcp", "docs-mcp"],
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        !popup.contains("Data shared with this app is subject to the app's"),
+        "expected installed plugin details to hide the disclosure line, got:\n{popup}"
+    );
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_installed",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_remote_row_opens_remote_detail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![PluginMarketplaceEntry {
+            name: "workspace-directory".to_string(),
+            path: None,
+            interface: Some(MarketplaceInterface {
+                display_name: Some("Workspace".to_string()),
+            }),
+            plugins: vec![plugins_test_remote_summary(
+                "plugins~Plugin_calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Workspace schedules."),
+                /*installed*/ false,
+            )],
+        }]),
+    );
+    let remote_row = popup
+        .lines()
+        .find(|line| line.contains("Calendar"))
+        .expect("expected remote plugin row");
+    assert!(
+        remote_row.contains("Available")
+            && remote_row.contains("Press Enter to install or view plugin details."),
+        "expected remote plugin row to be viewable, got:\n{remote_row}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginDetailLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Calendar");
+        }
+        other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { cwd: _, params }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some("workspace-directory".to_string())
+            );
+            assert_eq!(params.plugin_name, "plugins~Plugin_calendar");
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_remote_install_uses_remote_location() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = plugins_test_remote_summary(
+        "plugins~Plugin_linear",
+        "linear",
+        Some("Linear"),
+        Some("Issue tracking."),
+        /*installed*/ false,
+    );
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![PluginMarketplaceEntry {
+            name: "workspace-shared-with-me-private".to_string(),
+            path: None,
+            interface: Some(MarketplaceInterface {
+                display_name: Some("Shared with me".to_string()),
+            }),
+            plugins: vec![summary.clone()],
+        }])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: PluginDetail {
+                marketplace_name: "workspace-shared-with-me-private".to_string(),
+                marketplace_path: None,
+                summary,
+                share_url: None,
+                description: Some("Install shared Linear plugin.".to_string()),
+                skills: Vec::new(),
+                hooks: Vec::new(),
+                mcp_servers: Vec::new(),
+            },
+        }),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Install plugin") && popup.contains("Install this plugin now."),
+        "expected remote detail to offer install, got:\n{popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginInstallLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected OpenPluginInstallLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginInstall {
+            cwd: _,
+            location: crate::app_event::PluginLocation::Remote { marketplace_name },
+            plugin_name,
+            plugin_display_name,
+        }) => {
+            assert_eq!(marketplace_name, "workspace-shared-with-me-private");
+            assert_eq!(plugin_name, "plugins~Plugin_linear");
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected remote FetchPluginInstall event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_remote_uninstall_uses_remote_plugin_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = plugins_test_remote_summary(
+        "plugins~Plugin_linear",
+        "linear",
+        Some("Linear"),
+        Some("Issue tracking."),
+        /*installed*/ true,
+    );
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
+                summary,
+                Some("Installed shared Linear plugin."),
+            ),
+        }),
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginUninstallLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected OpenPluginUninstallLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginUninstall {
+            plugin_id,
+            plugin_display_name,
+            ..
+        }) => {
+            assert_eq!(plugin_id, "plugins~Plugin_linear");
+            assert_eq!(plugin_display_name, "Linear");
+        }
+        other => panic!("expected remote FetchPluginUninstall event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        source: PluginSource::Remote,
+        ..plugins_test_summary(
+            "linear@workspace-shared-with-me-private",
+            "linear",
+            Some("Linear"),
+            Some("Issue tracking."),
+            /*installed*/ true,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_remote_marketplace(
+                "workspace-shared-with-me-private",
+                "Shared with me",
+                vec![summary.clone()],
+            ),
+        ])),
+    );
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_remote_detail(
+                "workspace-shared-with-me-private",
+                summary,
+                Some("Installed shared Linear plugin."),
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("This remote plugin did not provide an uninstall identity.")
+            && !popup.contains("Remove this plugin now."),
+        "expected missing remote ID to disable uninstall, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    assert_eq!(
+        render_bottom_popup(&chat, /*width*/ 120),
+        popup,
+        "expected navigation to skip the disabled uninstall row"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_shows_local_share_context_as_read_only_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: "plugins~Plugin_docs".to_string(),
+            remote_version: Some("7".to_string()),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_url: Some("https://forall.astrio.app/dashboard".to_string()),
+            creator_account_user_id: None,
+            creator_name: Some("Test User".to_string()),
+            share_principals: None,
+        }),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Workspace docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let mut detail = plugins_test_detail(summary, Some("Workspace docs."), &[], &[], &[]);
+    detail.marketplace_path = Some(plugins_test_personal_marketplace_path());
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin: detail }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_local_share_read_only",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_shows_admin_disabled_status_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        availability: PluginAvailability::DisabledByAdmin,
+        ..plugins_test_summary(
+            "plugin-admin-blocked",
+            "admin-blocked",
+            Some("Admin Blocked"),
+            Some("Blocked by policy."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(summary, Some("Blocked by policy."), &[], &[], &[]),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    let status_row = popup
+        .lines()
+        .find(|line| line.contains("Disabled by admin"))
+        .expect("expected admin-disabled status row");
+    insta::assert_snapshot!(
+        status_row,
+        @"  Admin Blocked · Disabled by admin · Forall Marketplace"
+    );
+    assert!(
+        popup.contains("This plugin is disabled by your workspace admin.")
+            && !popup.contains("Install this plugin now."),
+        "expected admin-disabled detail to block install, got:\n{popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no action after rendering disabled install state"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        availability: PluginAvailability::DisabledByAdmin,
+        ..plugins_test_summary(
+            "plugin-admin-blocked",
+            "admin-blocked",
+            Some("Admin Blocked"),
+            Some("Blocked by policy."),
+            /*installed*/ true,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![summary])]),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Disabled by admin")
+            && popup.contains("Press Enter to view plugin details.")
+            && !popup.contains("Space to disable"),
+        "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    let before = render_bottom_popup(&chat, /*width*/ 120);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    let after = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        rx.try_recv().is_err(),
+        "space should not toggle admin-disabled installed plugins"
+    );
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn plugins_popup_admin_disabled_available_plugin_has_view_only_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let summary = PluginSummary {
+        availability: PluginAvailability::DisabledByAdmin,
+        ..plugins_test_summary(
+            "plugin-admin-blocked",
+            "admin-blocked",
+            Some("Admin Blocked"),
+            Some("Blocked by policy."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![summary])]),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let admin_blocked_row = popup
+        .lines()
+        .find(|line| line.contains("Admin Blocked"))
+        .expect("expected admin-disabled plugin row");
+    assert!(
+        admin_blocked_row.contains("Press Enter to view plugin details.")
+            && !admin_blocked_row.contains("install or view"),
+        "expected admin-disabled available plugin to stay view-only, got:\n{admin_blocked_row}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_remote_section_fallback_states_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let select_tab_containing = |chat: &mut ChatWidget, visible_text: &str| -> String {
+        for _ in 0..8 {
+            let popup = render_bottom_popup(chat, /*width*/ 100);
+            if popup.contains(visible_text) {
+                return popup;
+            }
+            chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+        }
+
+        let popup = render_bottom_popup(chat, /*width*/ 100);
+        panic!("expected plugins tab containing {visible_text:?}, got:\n{popup}");
+    };
+    let remote_section_state = |popup: &str| -> String {
+        let header = popup
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .nth(1)
+            .expect("expected remote section header");
+        let item = popup
+            .lines()
+            .find_map(|line| line.trim_start().strip_prefix('›'))
+            .expect("expected selected remote section item")
+            .trim();
+        format!("{header}\n{item}")
+    };
+
+    chat.add_plugins_output();
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(
+        cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+    let curated_loading_popup = select_tab_containing(&mut chat, "Loading curated plugins...");
+    let workspace_loading_popup = select_tab_containing(&mut chat, "Loading Workspace plugins.");
+
+    chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), Vec::new(), Vec::new());
+    let shared_empty_popup = select_tab_containing(&mut chat, "Shared with me.");
+
+    chat.on_plugin_remote_sections_loaded(
+        cwd.to_path_buf(),
+        Vec::new(),
+        vec![crate::app_event::PluginRemoteSectionError {
+            section_id: "workspace".to_string(),
+            label: "Workspace".to_string(),
+            message: "Sign in to load workspace plugins.".to_string(),
+        }],
+    );
+    let workspace_error_popup = select_tab_containing(&mut chat, "Workspace unavailable.");
+
+    let (mut remote_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    remote_chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    remote_chat.set_feature_enabled(Feature::RemotePlugin, /*enabled*/ true);
+    remote_chat.add_plugins_output();
+    let remote_cwd = remote_chat.config.cwd.clone();
+    remote_chat.on_plugins_loaded(
+        remote_cwd.to_path_buf(),
+        Ok(plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+        ])),
+    );
+    let remote_curated_empty_popup =
+        select_tab_containing(&mut remote_chat, "No curated plugins available");
+
+    insta::assert_snapshot!(
+        [
+            remote_section_state(&curated_loading_popup),
+            remote_section_state(&workspace_loading_popup),
+            remote_section_state(&shared_empty_popup),
+            remote_section_state(&workspace_error_popup),
+            remote_section_state(&remote_curated_empty_popup),
+        ]
+        .join("\n\n"),
+        @r###"
+        Curated marketplace.
+        Loading curated plugins...  This section updates when app-server returns it.
+
+        Loading Workspace plugins.
+        Loading Workspace plugins...  This section updates when app-server returns it.
+
+        Shared with me.
+        No shared plugins available  No plugins have been shared with you.
+
+        Workspace unavailable.
+        Workspace unavailable  Sign in to load workspace plugins.
+
+        Curated marketplace.
+        No curated plugins available  No curated plugins available.
+        "###
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_installed_remote_row_keeps_remote_detail_when_local_share_is_uninstalled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let remote_plugin_id = "plugins~Plugin_docs";
+    let remote_marketplace_name = "workspace-shared-with-me-private";
+    let local_summary = PluginSummary {
+        share_context: Some(PluginShareContext {
+            remote_plugin_id: remote_plugin_id.to_string(),
+            remote_version: None,
+            discoverability: None,
+            share_url: None,
+            creator_account_user_id: None,
+            creator_name: None,
+            share_principals: None,
+        }),
+        ..plugins_test_summary(
+            "plugin-docs",
+            "docs",
+            Some("Docs"),
+            Some("Local editable docs plugin."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        )
+    };
+    let popup = render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![local_summary]),
+            PluginMarketplaceEntry {
+                name: remote_marketplace_name.to_string(),
+                path: None,
+                interface: Some(MarketplaceInterface {
+                    display_name: Some("Shared with me".to_string()),
+                }),
+                plugins: vec![plugins_test_remote_summary(
+                    remote_plugin_id,
+                    "docs",
+                    Some("Docs"),
+                    Some("Shared docs plugin."),
+                    /*installed*/ true,
+                )],
+            },
+        ]),
+    );
+    let all_plugins_row = popup
+        .lines()
+        .find(|line| line.contains("Docs"))
+        .expect("expected all-plugins row");
+    assert!(
+        popup.contains("Installed 1 of 1 available plugins.")
+            && all_plugins_row.contains("Installed")
+            && !all_plugins_row.contains("Available"),
+        "expected installed remote duplicate to win over local mapped share, got:\n{popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    let installed_popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        installed_popup.contains("Showing 1 installed plugins.")
+            && installed_popup.contains("Docs"),
+        "expected installed remote duplicate in the Installed tab, got:\n{installed_popup}"
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenPluginDetailLoading {
+            plugin_display_name,
+        }) => {
+            assert_eq!(plugin_display_name, "Docs");
+        }
+        other => panic!("expected OpenPluginDetailLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchPluginDetail { params, .. }) => {
+            assert_eq!(params.marketplace_path, None);
+            assert_eq!(
+                params.remote_marketplace_name,
+                Some(remote_marketplace_name.to_string())
+            );
+            assert_eq!(params.plugin_name, remote_plugin_id);
+        }
+        other => panic!("expected FetchPluginDetail event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plugin_detail_error_popup_skips_disabled_row_numbering() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-figma",
+            "figma",
+            Some("Figma"),
+            Some("Design handoff."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Err("Failed to load plugin details.".to_string()),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugin_detail_error_popup", popup);
+}
+
+#[tokio::test]
+async fn plugins_popup_refresh_preserves_selected_row_position() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let initial = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-notion",
+            "notion",
+            Some("Notion"),
+            Some("Workspace docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-slack",
+            "slack",
+            Some("Slack"),
+            Some("Team chat."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    render_loaded_plugins_popup(&mut chat, initial);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let before = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        before.contains("› [-] Slack"),
+        "expected Slack to be selected before refresh, got:\n{before}"
+    );
+
+    let refreshed = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-airtable",
+            "airtable",
+            Some("Airtable"),
+            Some("Structured records."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-notion",
+            "notion",
+            Some("Notion"),
+            Some("Workspace docs."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-slack",
+            "slack",
+            Some("Slack"),
+            Some("Team chat."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
+
+    let after = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        after.contains("› [-] Notion"),
+        "expected refresh to preserve the selected row position, got:\n{after}"
+    );
+    assert!(
+        after.contains("Airtable"),
+        "expected refreshed popup to include the updated plugin list, got:\n{after}"
+    );
+    assert!(
+        after.contains("Slack"),
+        "expected refreshed popup to include the updated plugin list, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_refreshes_installed_counts_after_install() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let initial = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-calendar",
+            "calendar",
+            Some("Calendar"),
+            Some("Schedule management."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-drive",
+            "drive",
+            Some("Drive"),
+            Some("Document access."),
+            /*installed*/ true,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let before = render_loaded_plugins_popup(&mut chat, initial);
+    assert!(
+        before.contains("Installed 1 of 2 available plugins."),
+        "expected initial installed count before refresh, got:\n{before}"
+    );
+    assert!(
+        before.contains("Available"),
+        "expected pre-install popup copy before refresh, got:\n{before}"
+    );
+
+    let refreshed = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-calendar",
+            "calendar",
+            Some("Calendar"),
+            Some("Schedule management."),
+            /*installed*/ true,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-drive",
+            "drive",
+            Some("Drive"),
+            Some("Document access."),
+            /*installed*/ true,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
+
+    let after = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        after.contains("Installed 2 of 2 available plugins."),
+        "expected /plugins to refresh installed counts after install, got:\n{after}"
+    );
+    assert!(
+        after.contains("Installed   Space to disable; Enter view details."),
+        "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_space_toggles_installed_plugin_from_list() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    match rx.try_recv() {
+        Ok(AppEvent::SetPluginEnabled {
+            cwd: event_cwd,
+            plugin_id,
+            enabled,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(plugin_id, "plugin-drive");
+            assert!(!enabled);
+        }
+        other => panic!("expected SetPluginEnabled event, got {other:?}"),
+    }
+
+    chat.on_plugin_enabled_set(
+        cwd,
+        "plugin-drive".to_string(),
+        /*enabled*/ false,
+        Ok(()),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("› [ ] Drive"),
+        "expected selected plugin row to stay selected after refresh, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_space_on_uninstalled_row_does_not_start_search() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    let before = render_bottom_popup(&chat, /*width*/ 100);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    let after = render_bottom_popup(&chat, /*width*/ 100);
+
+    assert!(
+        rx.try_recv().is_err(),
+        "did not expect Space on an uninstalled plugin to emit an event"
+    );
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn plugins_popup_space_with_active_search_does_not_toggle_installed_plugin() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    type_plugins_search_query(&mut chat, "dr");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "did not expect Space with an active plugin search to emit a toggle event"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_filters_visible_rows_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "sla");
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("plugins_popup_search_filtered", popup);
+    assert!(
+        !popup.contains("Calendar") && !popup.contains("Drive"),
+        "expected search to leave only matching rows visible, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_installed_tab_filters_rows_and_clears_search() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "sla");
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Installed plugins.") && popup.contains("Showing 1 installed plugins."),
+        "expected Installed tab header, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Calendar") && !popup.contains("Slack"),
+        "expected Installed tab to show only installed plugins, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("sla"),
+        "expected tab switch to clear search query, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_openai_curated_tab_omits_marketplace_in_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-repo",
+                "repo",
+                Some("Repo Plugin"),
+                Some("Repo-only plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Curated marketplace."),
+        "expected Curated tab header, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Calendar") && !popup.contains("Repo Plugin"),
+        "expected Curated tab to show only official marketplace plugins, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("Forall Marketplace ·"),
+        "expected marketplace-specific rows to omit marketplace labels, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_refresh_preserves_duplicate_marketplace_tab_by_path() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![
+        PluginMarketplaceEntry {
+            name: "duplicate".to_string(),
+            path: Some(plugins_test_absolute_path(
+                "marketplaces/home/marketplace.json",
+            )),
+            interface: Some(MarketplaceInterface {
+                display_name: Some("Duplicate Marketplace".to_string()),
+            }),
+            plugins: vec![plugins_test_summary(
+                "plugin-home",
+                "home",
+                Some("Home Plugin"),
+                Some("Home marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )],
+        },
+        PluginMarketplaceEntry {
+            name: "duplicate".to_string(),
+            path: Some(plugins_test_absolute_path(
+                "marketplaces/repo/marketplace.json",
+            )),
+            interface: Some(MarketplaceInterface {
+                display_name: Some("Duplicate Marketplace".to_string()),
+            }),
+            plugins: vec![plugins_test_summary(
+                "plugin-repo",
+                "repo",
+                Some("Repo Plugin"),
+                Some("Repo marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )],
+        },
+    ]);
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.on_plugins_loaded(cwd.clone(), Ok(response.clone()));
+    chat.add_plugins_output();
+
+    for _ in 0..10 {
+        let popup = render_bottom_popup(&chat, /*width*/ 100);
+        if popup.contains("Duplicate Marketplace (2/2).")
+            && popup.contains("Repo Plugin")
+            && !popup.contains("Home Plugin")
+        {
+            break;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    chat.on_plugins_loaded(cwd, Ok(response));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Duplicate Marketplace (2/2)."),
+        "expected refresh to preserve the second duplicate marketplace tab, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Repo Plugin") && !popup.contains("Home Plugin"),
+        "expected second duplicate marketplace rows after refresh, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "zzz");
+
+    let no_matches = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        no_matches.contains("zzz"),
+        "expected popup to show the typed search query, got:\n{no_matches}"
+    );
+    assert!(
+        no_matches.contains("no matches"),
+        "expected popup to render the no-matches UX, got:\n{no_matches}"
+    );
+
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+    }
+
+    let restored = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        restored.contains("Calendar") && restored.contains("Slack"),
+        "expected clearing the query to restore the plugin rows, got:\n{restored}"
+    );
+    assert!(
+        !restored.contains("no matches"),
+        "did not expect the no-matches state after clearing the query, got:\n{restored}"
+    );
+}
+
+#[tokio::test]
+async fn experimental_features_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let features = vec![
+        ExperimentalFeatureItem {
+            feature: Feature::JsRepl,
+            name: "JavaScript REPL".to_string(),
+            description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
+            enabled: false,
+        },
+        ExperimentalFeatureItem {
+            feature: Feature::ShellTool,
+            name: "Shell tool".to_string(),
+            description: "Allow the model to run shell commands.".to_string(),
+            enabled: true,
+        },
+    ];
+    let view = ExperimentalFeaturesView::new(
+        features,
+        chat.app_event_tx.clone(),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
+    chat.bottom_pane.show_view(Box::new(view));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("experimental_features_popup", popup);
+}
+
+#[tokio::test]
+async fn experimental_features_toggle_saves_on_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let expected_feature = Feature::JsRepl;
+    let view = ExperimentalFeaturesView::new(
+        vec![ExperimentalFeatureItem {
+            feature: expected_feature,
+            name: "JavaScript REPL".to_string(),
+            description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
+            enabled: false,
+        }],
+        chat.app_event_tx.clone(),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
+    chat.bottom_pane.show_view(Box::new(view));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no updates until saving the popup"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut updates = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateFeatureFlags {
+            updates: event_updates,
+        } = event
+        {
+            updates = Some(event_updates);
+            break;
+        }
+    }
+
+    let updates = updates.expect("expected UpdateFeatureFlags event");
+    assert_eq!(updates, vec![(expected_feature, true)]);
+}
+
+#[tokio::test]
+async fn experimental_popup_omits_stable_guardian_approval() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let guardian_stage = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::GuardianApproval)
+        .map(|spec| spec.stage)
+        .expect("expected guardian approval feature metadata");
+
+    assert_eq!(guardian_stage, Stage::Stable);
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        !popup.contains("Auto-review"),
+        "expected stable auto-review feature to be omitted from experimental popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.open_multi_agent_enable_prompt();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("multi_agent_enable_prompt", popup);
+}
+
+#[tokio::test]
+async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.open_multi_agent_enable_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+    );
+    let cell = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+    assert!(rendered.contains("Subagents will be enabled in the next session."));
+}
+
+#[tokio::test]
+async fn memories_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
+
+    chat.open_memories_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_enable_prompt", popup);
+}
+
+#[tokio::test]
+async fn memories_enable_prompt_updates_feature_without_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::MemoryTool, true)]
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "memory enable prompt should not emit the success notice before persistence succeeds"
+    );
+}
+
+#[tokio::test]
+async fn memories_settings_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+
+    let popup = strip_osc8_for_snapshot(&render_bottom_popup(&chat, /*width*/ 80));
+    assert_chatwidget_snapshot!("memories_settings_popup", popup);
+}
+
+#[tokio::test]
+async fn memories_reset_confirmation_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_reset_confirmation", popup);
+}
+
+#[tokio::test]
+async fn memories_settings_toggle_saves_on_enter() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(' ')));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateMemorySettings {
+            use_memories: true,
+            generate_memories: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn memories_reset_confirmation_sends_event_on_confirm() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ResetMemories));
+}
+
+#[tokio::test]
+async fn model_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("model_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn skills_menu_default_mentions_shortcut_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_skills_menu();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("skills_menu_default_mentions_shortcut", popup);
+}
+
+#[tokio::test]
+async fn model_picker_hides_show_in_picker_false_models_from_cache() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let preset = |slug: &str, show_in_picker: bool| ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.open_model_popup_with_presets(vec![
+        preset("test-visible-model", true),
+        preset("test-hidden-model", false),
+    ]);
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("model_picker_filters_hidden_models", popup);
+    assert!(
+        popup.contains("test-visible-model"),
+        "expected visible model to appear in picker:\n{popup}"
+    );
+    assert!(
+        !popup.contains("test-hidden-model"),
+        "expected hidden model to be excluded from picker:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn server_overloaded_error_does_not_switch_models() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_model("gpt-5.3-codex");
+    while rx.try_recv().is_ok() {}
+    while op_rx.try_recv().is_ok() {}
+
+    handle_error(
+        &mut chat,
+        "server overloaded",
+        Some(ForallErrorInfo::ServerOverloaded),
+    );
+
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateModel(model) = event {
+            assert_eq!(
+                model, "gpt-5.3-codex",
+                "did not expect model switch on server-overloaded error"
+            );
+        }
+    }
+
+    while let Ok(event) = op_rx.try_recv() {
+        if let Op::OverrideTurnContext { model, .. } = event {
+            assert!(
+                model.is_none(),
+                "did not expect OverrideTurnContext model update on server-overloaded error"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset.supported_reasoning_efforts.insert(
+        2,
+        ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Custom("max".to_string()),
+            description: "Maximum available reasoning".to_string(),
+        },
+    );
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_applies_custom_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset
+        .supported_reasoning_efforts
+        .push(ReasoningEffortPreset {
+            effort: custom_effort.clone(),
+            description: "Maximum available reasoning".to_string(),
+        });
+    chat.open_reasoning_popup(preset);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let selected_effort_events = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::UpdateReasoningEffort(effort) => Some((None, effort)),
+            AppEvent::PersistModelSelection { model, effort } => Some((Some(model), effort)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected_effort_events,
+        vec![
+            (None, Some(custom_effort.clone())),
+            (Some("gpt-5.4".to_string()), Some(custom_effort)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+
+    set_chatgpt_auth(&mut chat);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let preset = get_available_model(&chat, "gpt-5.2");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+async fn assert_reasoning_shortcuts_update_effort(
+    key_events: [KeyEvent; 2],
+    expected_effort: ReasoningEffortConfig,
+    expect_model_update: bool,
+) {
+    for key_event in key_events {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+        chat.handle_key_event(key_event);
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        if expect_model_update {
+            assert!(
+                events.iter().any(
+                    |event| matches!(event, AppEvent::UpdateModel(model) if model == "gpt-5.4")
+                ),
+                "expected model update event for {key_event:?}; events: {events:?}"
+            );
+        }
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AppEvent::UpdateReasoningEffort(Some(effort)) if effort == &expected_effort
+            )),
+            "expected reasoning update event for {key_event:?}; events: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+            "expected no model persistence event for {key_event:?}; events: {events:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reasoning_up_shortcuts_raise_reasoning_effort() {
+    assert_reasoning_shortcuts_update_effort(
+        [
+            KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+        ],
+        ReasoningEffortConfig::High,
+        /*expect_model_update*/ true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn reasoning_down_shortcuts_lower_reasoning_effort() {
+    assert_reasoning_shortcuts_update_effort(
+        [
+            KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+        ],
+        ReasoningEffortConfig::Low,
+        /*expect_model_update*/ false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn reasoning_shortcut_clears_armed_quit_shortcut() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.arm_quit_shortcut(key_hint::ctrl(KeyCode::Char('c')));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert!(chat.quit_shortcut_expires_at.is_none());
+    assert!(chat.quit_shortcut_key.is_none());
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::Exit(_))),
+        "did not expect reasoning shortcut to quit; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_shortcut_is_ignored_with_model_popup_open() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.open_model_popup();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_))),
+        "did not expect reasoning update while popup is active; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+        "did not expect model persistence while popup is active; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_popup_shows_extra_high_with_space() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+
+    set_chatgpt_auth(&mut chat);
+
+    let preset = get_available_model(&chat, "gpt-5.4");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Extra high"),
+        "expected popup to include 'Extra high'; popup: {popup}"
+    );
+    assert!(
+        !popup.contains("Extrahigh"),
+        "expected popup not to include 'Extrahigh'; popup: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn single_reasoning_option_skips_selection() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let single_effort = vec![ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
+    }];
+    let preset = ModelPreset {
+        id: "model-with-single-reasoning".to_string(),
+        model: "model-with-single-reasoning".to_string(),
+        display_name: "model-with-single-reasoning".to_string(),
+        description: "".to_string(),
+        default_reasoning_effort: ReasoningEffortConfig::High,
+        supported_reasoning_efforts: single_effort,
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        !popup.contains("Select Reasoning Level"),
+        "expected reasoning selection popup to be skipped"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        "expected reasoning effort to be applied automatically; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn feedback_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    // Open the feedback category selection popup via slash command.
+    chat.dispatch_command(SlashCommand::Feedback);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("feedback_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn feedback_upload_consent_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+        chat.app_event_tx.clone(),
+        crate::app_event::FeedbackCategory::Bug,
+        chat.current_rollout_path.clone(),
+        Some("auto-review-rollout-thread-1.jsonl".to_string()),
+        /*include_windows_sandbox_log*/ true,
+        &forall_feedback::FeedbackDiagnostics::new(vec![forall_feedback::FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTPS_PROXY = hello".to_string()],
+        }]),
+    ));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("feedback_upload_consent_popup", popup);
+}
+
+#[tokio::test]
+async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_filename() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+        chat.app_event_tx.clone(),
+        crate::app_event::FeedbackCategory::GoodResult,
+        chat.current_rollout_path.clone(),
+        Some("auto-review-rollout-thread-1.jsonl".to_string()),
+        /*include_windows_sandbox_log*/ false,
+        &forall_feedback::FeedbackDiagnostics::new(vec![forall_feedback::FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTPS_PROXY = hello".to_string()],
+        }]),
+    ));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("feedback_good_result_consent_popup", popup);
+}
+
+#[tokio::test]
+async fn reasoning_popup_escape_returns_to_model_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    let preset = get_available_model(&chat, "gpt-5.4");
+    chat.open_reasoning_popup(preset);
+
+    let before_escape = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(before_escape.contains("Select Reasoning Level"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let after_escape = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(after_escape.contains("Select Model"));
+    assert!(!after_escape.contains("Select Reasoning Level"));
+}

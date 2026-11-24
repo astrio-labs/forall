@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "error": {
+      "description": "Why the URL was not opened, when `opened` is false.\n\nThis is nullable because successful opens have no error.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "opened": {
+      "description": "True when the client opened the URL in its in-app browser pane.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "opened"
+  ],
+  "title": "BrowserOpenResponse",
+  "type": "object"
+}

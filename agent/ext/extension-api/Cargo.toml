@@ -1,0 +1,25 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-extension-api"
+version.workspace = true
+
+[lib]
+name = "forall_extension_api"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-config = { workspace = true }
+forall-context-fragments = { workspace = true }
+forall-protocol = { workspace = true }
+forall-tools = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

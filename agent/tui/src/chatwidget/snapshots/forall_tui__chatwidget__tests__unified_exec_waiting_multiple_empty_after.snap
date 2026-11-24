@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 769
+expression: combined
+---
+• Waited for background terminal · just fix

@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 722
+expression: combined
+---
+• Spawned 019cff70-2599-75e2-af72-b91781b41a8e (gpt-5 high)
+  └ Explore the repo

@@ -1,0 +1,22 @@
+Use /compact when the conversation gets long to summarize history and free up context.
+Start a fresh idea with /new; the previous session stays in history.
+Use /feedback to send logs to the maintainers when something looks off.
+Switch models or reasoning effort quickly with /model.
+Use /permissions to control when Forall asks for confirmation.
+Run /review to get a code review of your current changes.
+Use /skills to list available skills or ask Forall to use one.
+Use /status to see the current model, approvals, and token usage.
+Use /statusline to configure which items appear in the status line.
+Use /fork to branch the current chat into a new thread.
+Use /side to start a side conversation in a temporary fork without polluting the main thread.
+Use /init to create an AGENTS.md with project-specific guidance.
+Use /mcp to list configured MCP tools.
+Use /rename to rename your threads for easier thread resuming.
+You can run any shell command from Forall using `!` (e.g. `!ls`)
+Type / to open the command popup; Tab autocompletes slash commands.
+When the composer is empty, press Esc to step back and edit your last message; Enter confirms.
+Press Tab to queue a message when a task is running; otherwise it sends immediately (except `!`).
+[tui.keymap] in ~/.forall/config.toml lets you rebind supported shortcuts.
+Paste an image with Ctrl+V to attach it to your next message.
+You can resume a previous conversation by running `forall resume`
+Use /copy or press Ctrl+O to copy the latest agent response as Markdown.

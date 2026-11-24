@@ -1,0 +1,36 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-mcp-extension"
+version.workspace = true
+
+[lib]
+name = "forall_mcp_extension"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-core = { workspace = true }
+forall-core-plugins = { workspace = true }
+forall-config = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-features = { workspace = true }
+forall-mcp = { workspace = true }
+forall-plugin = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+forall-login = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

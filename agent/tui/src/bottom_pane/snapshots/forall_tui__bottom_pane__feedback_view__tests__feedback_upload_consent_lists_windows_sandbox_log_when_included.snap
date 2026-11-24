@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/feedback_view.rs
+assertion_line: 735
+expression: rendered
+---
+Upload logs?
+
+The following files will be sent:
+  • forall-logs.log
+  • forall-doctor-report.json
+  • windows-sandbox.log
+  • rollout.jsonl
+  • auto-review-rollout.jsonl

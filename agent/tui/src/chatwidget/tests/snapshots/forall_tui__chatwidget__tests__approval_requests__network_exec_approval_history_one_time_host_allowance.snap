@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/approval_requests.rs
+assertion_line: 231
+expression: lines_to_single_string(&decision)
+---
+✔ You approved forall network access to http://example.com this time

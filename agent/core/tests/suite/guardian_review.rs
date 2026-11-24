@@ -1,0 +1,250 @@
+#![cfg(not(target_os = "windows"))]
+
+use anyhow::Result;
+use core_test_support::fs_wait;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::responses::start_websocket_server;
+use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
+use core_test_support::test_forall::local_selections;
+use core_test_support::test_forall::test_forall;
+use core_test_support::wait_for_event;
+use forall_core::config::Constrained;
+use forall_core::sandboxing::SandboxPermissions;
+use forall_protocol::config_types::ApprovalsReviewer;
+use forall_protocol::protocol::AskForApproval;
+use forall_protocol::protocol::EventMsg;
+use forall_protocol::protocol::Op;
+use forall_protocol::protocol::SandboxPolicy;
+use forall_protocol::user_input::UserInput;
+use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
+use tempfile::TempDir;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tool_args = json!({
+        "cmd": "true",
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Exercise Guardian approval routing.",
+    })
+    .to_string();
+    let server = start_websocket_server(vec![
+        vec![vec![ev_response_created("warm-1"), ev_completed("warm-1")]],
+        vec![vec![ev_response_created("warm-2"), ev_completed("warm-2")]],
+        vec![vec![
+            ev_response_created("approval-request"),
+            ev_function_call("approval-call", "exec_command", &tool_args),
+            ev_completed("approval-request"),
+        ]],
+        vec![vec![
+            ev_response_created("guardian-review"),
+            ev_completed("guardian-review"),
+        ]],
+    ])
+    .await;
+    let mut builder = test_forall().with_config(|config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    });
+
+    let test = builder.build_with_websocket_server(&server).await?;
+    let (first, second) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+            server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
+        )
+    })
+    .await?;
+    let prewarm_requests = [first.body_json(), second.body_json()];
+    let guardian_prewarm = prewarm_requests
+        .iter()
+        .find(|request| {
+            request["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
+        })
+        .expect("guardian startup prewarm request");
+    assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
+    let guardian_thread_id = guardian_prewarm["client_metadata"]["thread_id"]
+        .as_str()
+        .expect("guardian thread id");
+
+    test.forall
+        .submit(
+            vec![UserInput::Text {
+                text: "run a command that requires Guardian review".into(),
+                text_elements: Vec::new(),
+            }]
+            .into(),
+        )
+        .await?;
+    let guardian_review = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 3, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(
+        guardian_review["client_metadata"]["x-openai-subagent"].as_str(),
+        Some("guardian")
+    );
+    assert_eq!(
+        guardian_review["client_metadata"]["thread_id"].as_str(),
+        Some(guardian_thread_id)
+    );
+    assert_eq!(guardian_review.get("generate"), None);
+
+    test.forall.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_session_does_not_inherit_legacy_notify() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    let notify_dir = TempDir::new()?;
+    let notify_script = notify_dir.path().join("notify.sh");
+    fs::write(
+        &notify_script,
+        r#"#!/bin/bash
+set -e
+payload_path="$(dirname "${0}")/notify.jsonl"
+printf '%s\n' "${@: -1}" >> "${payload_path}""#,
+    )?;
+    fs::set_permissions(&notify_script, fs::Permissions::from_mode(0o755))?;
+    let notify_file = notify_dir.path().join("notify.jsonl");
+    let notify_script_str = notify_script.to_str().unwrap().to_string();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_forall().with_config(move |config| {
+        config.notify = Some(vec![notify_script_str]);
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .set_legacy_sandbox_policy(sandbox_policy_for_config)
+            .expect("set sandbox policy");
+    });
+    let test = builder.build(&server).await?;
+
+    let output_file = test.cwd.path().join("guardian-review-notify.txt");
+    let command = format!("printf guardian-approved > {}", output_file.display());
+    let tool_args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": "Exercise Guardian approval routing.",
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parent-tool"),
+                ev_function_call(
+                    "exec-call",
+                    "exec_command",
+                    &serde_json::to_string(&tool_args)?,
+                ),
+                ev_completed("resp-parent-tool"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-review"),
+                ev_assistant_message(
+                    "msg-guardian-review",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "The command writes a marker file in the workspace.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-review"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parent-done"),
+                ev_assistant_message("msg-parent-done", "done"),
+                ev_completed("resp-parent-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.forall
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run a command that requires Guardian review".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: forall_protocol::protocol::ThreadSettingsOverrides {
+                environments: Some(local_selections(test.config.cwd.clone())),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(sandbox_policy),
+                ..Default::default()
+            },
+        })
+        .await?;
+    wait_for_event(&test.forall, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let guardian_request = responses
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("Exercise Guardian approval routing."))
+        .expect("expected Guardian review request");
+    assert!(guardian_request.body_contains_text(&command));
+
+    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let notify_payload_raw = tokio::fs::read_to_string(&notify_file).await?;
+    let payloads: Vec<Value> = notify_payload_raw
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<std::result::Result<_, _>>()?;
+
+    assert_eq!(
+        payloads.len(),
+        1,
+        "unexpected notify payloads: {payloads:?}"
+    );
+    assert_eq!(
+        payloads[0]["input-messages"],
+        json!(["run a command that requires Guardian review"])
+    );
+    assert_eq!(payloads[0]["last-assistant-message"], json!("done"));
+    assert!(
+        !notify_payload_raw.contains(
+            "The following is the Forall agent history whose request action you are assessing."
+        ),
+        "Guardian review transcript leaked into legacy notify payload: {notify_payload_raw}"
+    );
+    assert_eq!(fs::read_to_string(&output_file)?, "guardian-approved");
+
+    Ok(())
+}

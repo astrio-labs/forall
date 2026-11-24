@@ -1,0 +1,48 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-memories-write"
+version.workspace = true
+
+[lib]
+name = "forall_memories_write"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+forall-core = { workspace = true }
+forall-config = { workspace = true }
+forall-features = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-otel = { workspace = true }
+forall-protocol = { workspace = true }
+forall-rollout = { workspace = true }
+forall-rollout-trace = { workspace = true }
+forall-secrets = { workspace = true }
+forall-state = { workspace = true }
+forall-terminal-detection = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-output-truncation = { workspace = true }
+forall-utils-template = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
+tracing = { workspace = true, features = ["log"] }
+uuid = { workspace = true, features = ["v4", "v5"] }
+
+[dev-dependencies]
+forall-model-provider-info = { workspace = true }
+forall-models-manager = { workspace = true }
+core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros"] }
+wiremock = { workspace = true }

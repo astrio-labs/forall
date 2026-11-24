@@ -1,0 +1,4139 @@
+use super::*;
+use forall_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
+use forall_protocol::config_types::MultiAgentMode;
+use forall_protocol::items::AgentMessageContent;
+use forall_protocol::items::AgentMessageItem;
+use forall_protocol::items::FileChangeItem;
+use forall_protocol::items::ImageViewItem;
+use forall_protocol::items::McpToolCallItem;
+use forall_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
+use forall_protocol::items::ReasoningItem;
+use forall_protocol::items::TurnItem;
+use forall_protocol::items::UserMessageItem;
+use forall_protocol::items::WebSearchItem;
+use forall_protocol::mcp::CallToolResult;
+use forall_protocol::mcp::McpServerInfo;
+use forall_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
+use forall_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
+use forall_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
+use forall_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use forall_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+use forall_protocol::models::ImageDetail;
+use forall_protocol::models::MessagePhase;
+use forall_protocol::models::NetworkPermissions as CoreNetworkPermissions;
+use forall_protocol::models::WebSearchAction as CoreWebSearchAction;
+use forall_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
+use forall_protocol::permissions::FileSystemPath as CoreFileSystemPath;
+use forall_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
+use forall_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
+use forall_protocol::protocol::AgentStatus as CoreAgentStatus;
+use forall_protocol::protocol::AskForApproval as CoreAskForApproval;
+use forall_protocol::protocol::ConversationTextRole;
+use forall_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
+use forall_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use forall_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use forall_protocol::user_input::UserInput as CoreUserInput;
+use forall_utils_absolute_path::AbsolutePathBuf;
+use forall_utils_absolute_path::test_support::PathBufExt;
+use forall_utils_absolute_path::test_support::test_path_buf;
+use forall_utils_path_uri::LegacyAppPathString;
+use forall_utils_path_uri::PathUri;
+use pretty_assertions::assert_eq;
+use serde_json::Value as JsonValue;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::time::Duration;
+
+fn absolute_path_string(path: &str) -> String {
+    let path = format!("/{}", path.trim_start_matches('/'));
+    test_path_buf(&path).display().to_string()
+}
+
+fn absolute_path(path: &str) -> AbsolutePathBuf {
+    let path = format!("/{}", path.trim_start_matches('/'));
+    test_path_buf(&path).abs()
+}
+
+fn test_absolute_path() -> AbsolutePathBuf {
+    absolute_path("readable")
+}
+
+#[test]
+fn thread_sources_round_trip_as_scalar_labels() {
+    for (source, label) in [
+        (ThreadSource::User, "user"),
+        (ThreadSource::Subagent, "subagent"),
+        (
+            ThreadSource::Feature("automation".to_string()),
+            "automation",
+        ),
+        (ThreadSource::MemoryConsolidation, "memory_consolidation"),
+    ] {
+        let value = serde_json::to_value(&source).expect("serialize thread source");
+
+        assert_eq!(value, json!(label));
+        assert_eq!(
+            serde_json::from_value::<ThreadSource>(value).expect("deserialize thread source"),
+            source
+        );
+
+        let core_source: forall_protocol::protocol::ThreadSource = source.clone().into();
+        assert_eq!(ThreadSource::from(core_source), source);
+    }
+}
+
+#[test]
+fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
+    assert_eq!(
+        serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+        "\"user\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
+        "\"auto_review\""
+    );
+
+    for value in ["user", "auto_review", "guardian_subagent"] {
+        let json = format!("\"{value}\"");
+        let reviewer: ApprovalsReviewer =
+            serde_json::from_str(&json).expect("deserialize reviewer");
+        let expected = if value == "user" {
+            ApprovalsReviewer::User
+        } else {
+            ApprovalsReviewer::AutoReview
+        };
+        assert_eq!(expected, reviewer);
+    }
+}
+
+#[test]
+fn turn_defaults_legacy_missing_items_view_to_full() {
+    let turn: Turn = serde_json::from_value(json!({
+        "id": "turn_123",
+        "items": [],
+        "status": "completed",
+        "error": null,
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+    }))
+    .expect("legacy turn should deserialize");
+
+    assert_eq!(turn.items_view, TurnItemsView::Full);
+}
+
+#[test]
+fn thread_turns_list_params_accepts_items_view() {
+    let params = serde_json::from_value::<ThreadTurnsListParams>(json!({
+        "threadId": "thr_123",
+        "cursor": null,
+        "limit": 25,
+        "sortDirection": "desc",
+        "itemsView": "notLoaded",
+    }))
+    .expect("thread turns list params should deserialize");
+
+    assert_eq!(params.thread_id, "thr_123");
+    assert_eq!(params.items_view, Some(TurnItemsView::NotLoaded));
+}
+
+#[test]
+fn thread_resume_params_accept_turns_page_bootstrap() {
+    let params = serde_json::from_value::<ThreadResumeParams>(json!({
+        "threadId": "thr_123",
+        "initialTurnsPage": {
+            "limit": 25,
+            "sortDirection": "asc",
+            "itemsView": "full",
+        },
+    }))
+    .expect("thread resume params should deserialize");
+
+    assert_eq!(params.thread_id, "thr_123");
+    assert_eq!(
+        params.initial_turns_page,
+        Some(ThreadResumeInitialTurnsPageParams {
+            limit: Some(25),
+            sort_direction: Some(SortDirection::Asc),
+            items_view: Some(TurnItemsView::Full),
+        })
+    );
+}
+
+#[test]
+fn thread_resume_response_round_trips_initial_turns_page() {
+    let response = ThreadResumeResponse {
+        thread: Thread {
+            id: "thr_123".to_string(),
+            session_id: "thr_123".to_string(),
+            forked_from_id: None,
+            parent_thread_id: None,
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            recency_at: Some(1),
+            status: ThreadStatus::Idle,
+            path: None,
+            cwd: absolute_path("tmp"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Exec,
+            thread_source: None,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: Vec::new(),
+        },
+        model: "gpt-5".to_string(),
+        model_provider: "openai".to_string(),
+        service_tier: None,
+        cwd: absolute_path("tmp"),
+        runtime_workspace_roots: Vec::new(),
+        instruction_sources: Vec::new(),
+        approval_policy: AskForApproval::OnFailure,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox: SandboxPolicy::DangerFullAccess,
+        active_permission_profile: None,
+        reasoning_effort: None,
+        multi_agent_mode: Default::default(),
+        initial_turns_page: Some(TurnsPage {
+            data: Vec::new(),
+            next_cursor: Some("cursor_next".to_string()),
+            backwards_cursor: Some("cursor_back".to_string()),
+        }),
+    };
+
+    let value = serde_json::to_value(&response).expect("serialize thread resume response");
+    assert_eq!(
+        value.get("initialTurnsPage"),
+        Some(&json!({
+            "data": [],
+            "nextCursor": "cursor_next",
+            "backwardsCursor": "cursor_back",
+        }))
+    );
+    let decoded = serde_json::from_value::<ThreadResumeResponse>(value)
+        .expect("deserialize thread resume response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn thread_turns_items_list_round_trips() {
+    let params = ThreadTurnsItemsListParams {
+        thread_id: "thr_123".to_string(),
+        turn_id: "turn_456".to_string(),
+        cursor: Some("cursor_1".to_string()),
+        limit: Some(50),
+        sort_direction: Some(SortDirection::Asc),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&params).expect("serialize params"),
+        json!({
+            "threadId": "thr_123",
+            "turnId": "turn_456",
+            "cursor": "cursor_1",
+            "limit": 50,
+            "sortDirection": "asc",
+        })
+    );
+    let response = ThreadTurnsItemsListResponse {
+        data: vec![ThreadItem::ContextCompaction {
+            id: "item_1".to_string(),
+        }],
+        next_cursor: None,
+        backwards_cursor: Some("cursor_0".to_string()),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&response).expect("serialize response"),
+        json!({
+            "data": [{"type": "contextCompaction", "id": "item_1"}],
+            "nextCursor": null,
+            "backwardsCursor": "cursor_0",
+        })
+    );
+}
+
+#[test]
+fn thread_list_params_accepts_single_cwd() {
+    let params = serde_json::from_value::<ThreadListParams>(json!({
+        "cwd": "/workspace",
+    }))
+    .expect("single cwd should deserialize");
+
+    assert_eq!(
+        params.cwd,
+        Some(ThreadListCwdFilter::One("/workspace".to_string()))
+    );
+    assert!(!params.use_state_db_only);
+}
+
+#[test]
+fn thread_list_params_accepts_multiple_cwds() {
+    let params = serde_json::from_value::<ThreadListParams>(json!({
+        "cwd": ["/workspace", "/other-workspace"],
+    }))
+    .expect("cwd array should deserialize");
+
+    assert_eq!(
+        params.cwd,
+        Some(ThreadListCwdFilter::Many(vec![
+            "/workspace".to_string(),
+            "/other-workspace".to_string(),
+        ]))
+    );
+}
+
+#[test]
+fn thread_list_params_accepts_state_db_only_flag() {
+    let params = serde_json::from_value::<ThreadListParams>(json!({
+        "useStateDbOnly": true,
+    }))
+    .expect("state db only flag should deserialize");
+
+    assert!(params.use_state_db_only);
+}
+
+#[test]
+fn collab_agent_state_maps_interrupted_status() {
+    assert_eq!(
+        CollabAgentState::from(CoreAgentStatus::Interrupted),
+        CollabAgentState {
+            status: CollabAgentStatus::Interrupted,
+            message: None,
+        }
+    );
+}
+
+#[test]
+fn external_agent_config_plugins_details_round_trip() {
+    let item: ExternalAgentConfigMigrationItem = serde_json::from_value(json!({
+        "itemType": "PLUGINS",
+        "description": "Install supported plugins from Claude settings",
+        "cwd": absolute_path_string("repo"),
+        "details": {
+            "plugins": [
+                {
+                    "marketplaceName": "team-marketplace",
+                    "pluginNames": ["asana"]
+                }
+            ]
+        }
+    }))
+    .expect("plugins migration item should deserialize");
+
+    assert_eq!(
+        item,
+        ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: "Install supported plugins from Claude settings".to_string(),
+            cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "team-marketplace".to_string(),
+                    plugin_names: vec!["asana".to_string()],
+                }],
+                ..Default::default()
+            }),
+        }
+    );
+}
+
+#[test]
+fn external_agent_config_import_params_accept_legacy_plugin_details() {
+    let params: ExternalAgentConfigImportParams = serde_json::from_value(json!({
+        "migrationItems": [{
+            "itemType": "PLUGINS",
+            "description": "Install supported plugins from Claude settings",
+            "cwd": absolute_path_string("repo"),
+            "details": {
+                "plugins": [
+                    {
+                        "marketplaceName": "team-marketplace",
+                        "pluginNames": ["asana"]
+                    }
+                ]
+            }
+        }]
+    }))
+    .expect("legacy plugin import params should deserialize");
+
+    assert_eq!(
+        params,
+        ExternalAgentConfigImportParams {
+            migration_items: vec![ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                description: "Install supported plugins from Claude settings".to_string(),
+                cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+                details: Some(MigrationDetails {
+                    plugins: vec![PluginsMigration {
+                        marketplace_name: "team-marketplace".to_string(),
+                        plugin_names: vec!["asana".to_string()],
+                    }],
+                    ..Default::default()
+                }),
+            }],
+            source: None,
+        }
+    );
+}
+
+#[test]
+fn command_execution_request_approval_localization_rejects_relative_additional_permission_paths() {
+    let params = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+        "threadId": "thr_123",
+        "turnId": "turn_123",
+        "itemId": "call_123",
+        "startedAtMs": 1,
+        "command": "cat file",
+        "cwd": absolute_path_string("tmp"),
+        "commandActions": null,
+        "reason": null,
+        "networkApprovalContext": null,
+        "additionalPermissions": {
+            "network": null,
+            "fileSystem": {
+                "read": ["relative/path"],
+                "write": null
+            }
+        },
+        "proposedExecpolicyAmendment": null,
+        "proposedNetworkPolicyAmendments": null,
+        "availableDecisions": null
+    }))
+    .expect("API paths should deserialize before localization");
+    let additional_permissions = params
+        .additional_permissions
+        .expect("additional permissions should be present");
+
+    let err = CoreAdditionalPermissionProfile::try_from(additional_permissions)
+        .expect_err("relative additional permission paths should fail localization");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn permissions_request_approval_uses_request_permission_profile() {
+    let read_only_path = if cfg!(windows) {
+        r"C:\tmp\read-only"
+    } else {
+        "/tmp/read-only"
+    };
+    let read_write_path = if cfg!(windows) {
+        r"C:\tmp\read-write"
+    } else {
+        "/tmp/read-write"
+    };
+    let params = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+        "threadId": "thr_123",
+        "turnId": "turn_123",
+        "itemId": "call_123",
+        "environmentId": "remote",
+        "startedAtMs": 1,
+        "cwd": absolute_path_string("repo"),
+        "reason": "Select a workspace root",
+        "permissions": {
+            "network": {
+                "enabled": true,
+            },
+            "fileSystem": {
+                "read": [read_only_path],
+                "write": [read_write_path],
+            },
+        },
+    }))
+    .expect("permissions request should deserialize");
+
+    assert_eq!(params.cwd, absolute_path("repo"));
+    assert_eq!(params.environment_id.as_deref(), Some("remote"));
+    assert_eq!(
+        params.permissions,
+        RequestPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![
+                    serde_json::from_value(json!(read_only_path))
+                        .expect("API path string should deserialize")
+                ]),
+                write: Some(vec![
+                    serde_json::from_value(json!(read_write_path))
+                        .expect("API path string should deserialize")
+                ]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
+        }
+    );
+
+    assert_eq!(
+        CoreRequestPermissionProfile::try_from(params.permissions)
+            .expect("API paths should convert to native paths"),
+        CoreRequestPermissionProfile {
+            network: Some(CoreNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                        .expect("path must be absolute"),
+                ]),
+                Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                        .expect("path must be absolute"),
+                ]),
+            )),
+        }
+    );
+}
+
+#[test]
+fn permissions_request_approval_rejects_macos_permissions() {
+    let err = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+        "threadId": "thr_123",
+        "turnId": "turn_123",
+        "itemId": "call_123",
+        "startedAtMs": 1,
+        "cwd": absolute_path_string("repo"),
+        "reason": "Select a workspace root",
+        "permissions": {
+            "network": null,
+            "fileSystem": null,
+            "macos": {
+                "preferences": "read_only",
+                "automations": "none",
+                "launchServices": false,
+                "accessibility": false,
+                "calendar": false,
+                "reminders": false,
+                "contacts": "none",
+            },
+        },
+    }))
+    .expect_err("permissions request should reject macos permissions");
+
+    assert!(
+        err.to_string().contains("unknown field `macos`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn additional_file_system_permissions_preserves_canonical_entries() {
+    let core_permissions = CoreFileSystemPermissions {
+        entries: vec![
+            CoreFileSystemSandboxEntry {
+                path: CoreFileSystemPath::Special {
+                    value: CoreFileSystemSpecialPath::Root,
+                },
+                access: CoreFileSystemAccessMode::Write,
+            },
+            CoreFileSystemSandboxEntry {
+                path: CoreFileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: CoreFileSystemAccessMode::Deny,
+            },
+        ],
+        glob_scan_max_depth: NonZeroUsize::new(2),
+    };
+
+    let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+    assert_eq!(
+        permissions,
+        AdditionalFileSystemPermissions {
+            read: None,
+            write: None,
+            glob_scan_max_depth: NonZeroUsize::new(2),
+            entries: Some(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ]),
+        }
+    );
+    assert_eq!(
+        CoreFileSystemPermissions::try_from(permissions)
+            .expect("API paths should convert to native paths"),
+        core_permissions
+    );
+}
+
+#[test]
+fn additional_file_system_permissions_populates_entries_for_legacy_roots() {
+    let read_only_path = absolute_path("read-only");
+    let read_write_path = absolute_path("read-write");
+    let core_permissions = CoreFileSystemPermissions::from_read_write_roots(
+        Some(vec![read_only_path.clone()]),
+        Some(vec![read_write_path.clone()]),
+    );
+
+    let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+    let read_only_api_path = LegacyAppPathString::from_abs_path(&read_only_path);
+    let read_write_api_path = LegacyAppPathString::from_abs_path(&read_write_path);
+
+    assert_eq!(
+        permissions,
+        AdditionalFileSystemPermissions {
+            read: Some(vec![read_only_api_path.clone()]),
+            write: Some(vec![read_write_api_path.clone()]),
+            glob_scan_max_depth: None,
+            entries: Some(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: read_only_api_path,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: read_write_api_path,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+            ]),
+        }
+    );
+    assert_eq!(
+        CoreFileSystemPermissions::try_from(permissions)
+            .expect("API paths should convert to native paths"),
+        core_permissions
+    );
+}
+
+#[test]
+fn additional_file_system_permissions_rejects_zero_glob_scan_depth() {
+    serde_json::from_value::<AdditionalFileSystemPermissions>(json!({
+        "read": null,
+        "write": null,
+        "globScanMaxDepth": 0,
+        "entries": [],
+    }))
+    .expect_err("zero glob scan depth should fail deserialization");
+}
+
+#[test]
+fn legacy_current_working_directory_special_path_deserializes_as_project_roots() {
+    let special_path = serde_json::from_value::<FileSystemSpecialPath>(json!({
+        "kind": "current_working_directory",
+    }))
+    .expect("legacy cwd special path should deserialize");
+
+    assert_eq!(
+        special_path,
+        FileSystemSpecialPath::ProjectRoots { subpath: None }
+    );
+    assert_eq!(
+        serde_json::to_value(&special_path).expect("serialize special path"),
+        json!({
+            "kind": "project_roots",
+            "subpath": null,
+        })
+    );
+}
+
+#[test]
+fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
+    let read_only_path = if cfg!(windows) {
+        r"C:\tmp\read-only"
+    } else {
+        "/tmp/read-only"
+    };
+    let read_write_path = if cfg!(windows) {
+        r"C:\tmp\read-write"
+    } else {
+        "/tmp/read-write"
+    };
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+        "permissions": {
+            "network": {
+                "enabled": true,
+            },
+            "fileSystem": {
+                "read": [read_only_path],
+                "write": [read_write_path],
+            },
+        },
+    }))
+    .expect("permissions response should deserialize");
+
+    assert_eq!(
+        response.permissions,
+        GrantedPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: Some(vec![
+                    serde_json::from_value(json!(read_only_path))
+                        .expect("API path string should deserialize")
+                ]),
+                write: Some(vec![
+                    serde_json::from_value(json!(read_write_path))
+                        .expect("API path string should deserialize")
+                ]),
+                glob_scan_max_depth: None,
+                entries: None,
+            }),
+        }
+    );
+
+    assert_eq!(
+        CoreAdditionalPermissionProfile::try_from(response.permissions)
+            .expect("API paths should convert to native paths"),
+        CoreAdditionalPermissionProfile {
+            network: Some(CoreNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                        .expect("path must be absolute"),
+                ]),
+                Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                        .expect("path must be absolute"),
+                ]),
+            )),
+        }
+    );
+}
+
+#[test]
+fn permissions_request_approval_response_defaults_scope_to_turn() {
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+        "permissions": {},
+    }))
+    .expect("response should deserialize");
+
+    assert_eq!(response.scope, PermissionGrantScope::Turn);
+    assert_eq!(response.strict_auto_review, None);
+}
+
+#[test]
+fn permissions_request_approval_response_accepts_strict_auto_review() {
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+        "permissions": {},
+        "strictAutoReview": true,
+    }))
+    .expect("response should deserialize");
+
+    assert_eq!(response.strict_auto_review, Some(true));
+}
+
+#[test]
+fn permission_profile_selection_uses_id_string() {
+    let start: ThreadStartParams = serde_json::from_value(json!({
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/start params deserialize");
+    assert_eq!(
+        start.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+
+    let turn: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "input": [],
+        "permissions": "dev",
+    }))
+    .expect("turn/start params deserialize");
+    assert_eq!(turn.permissions, Some("dev".to_string()));
+
+    let command: CommandExecParams = serde_json::from_value(json!({
+        "command": ["echo", "hello"],
+        "permissionProfile": "dev",
+    }))
+    .expect("command/exec params deserialize");
+    assert_eq!(command.permission_profile, Some("dev".to_string()));
+
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(
+        resume.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "permissions": BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(
+        fork.permissions,
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
+    );
+}
+
+#[test]
+fn thread_path_params_deserialize_empty_path_as_none() {
+    let resume: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(resume.path, None);
+
+    let fork: ThreadForkParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "",
+    }))
+    .expect("thread/fork params deserialize");
+    assert_eq!(fork.path, None);
+
+    let resume_with_path: ThreadResumeParams = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "path": "/tmp/resume-thread.jsonl",
+    }))
+    .expect("thread/resume params deserialize");
+    assert_eq!(
+        resume_with_path.path,
+        Some(PathBuf::from("/tmp/resume-thread.jsonl"))
+    );
+}
+
+#[test]
+fn fs_get_metadata_response_round_trips_minimal_fields() {
+    let response = FsGetMetadataResponse {
+        is_directory: false,
+        is_file: true,
+        is_symlink: false,
+        created_at_ms: 123,
+        modified_at_ms: 456,
+    };
+
+    let value = serde_json::to_value(&response).expect("serialize fs/getMetadata response");
+    assert_eq!(
+        value,
+        json!({
+            "isDirectory": false,
+            "isFile": true,
+            "isSymlink": false,
+            "createdAtMs": 123,
+            "modifiedAtMs": 456,
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsGetMetadataResponse>(value)
+        .expect("deserialize fs/getMetadata response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn fs_read_file_response_round_trips_base64_data() {
+    let response = FsReadFileResponse {
+        data_base64: "aGVsbG8=".to_string(),
+    };
+
+    let value = serde_json::to_value(&response).expect("serialize fs/readFile response");
+    assert_eq!(
+        value,
+        json!({
+            "dataBase64": "aGVsbG8=",
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsReadFileResponse>(value)
+        .expect("deserialize fs/readFile response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn fs_read_file_params_round_trip() {
+    let params = FsReadFileParams {
+        path: absolute_path("tmp/example.txt"),
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
+    assert_eq!(
+        value,
+        json!({
+            "path": absolute_path_string("tmp/example.txt"),
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<FsReadFileParams>(value).expect("deserialize fs/readFile params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn fs_create_directory_params_round_trip_with_default_recursive() {
+    let params = FsCreateDirectoryParams {
+        path: absolute_path("tmp/example"),
+        recursive: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
+    assert_eq!(
+        value,
+        json!({
+            "path": absolute_path_string("tmp/example"),
+            "recursive": null,
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsCreateDirectoryParams>(value)
+        .expect("deserialize fs/createDirectory params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn fs_write_file_params_round_trip_with_base64_data() {
+    let params = FsWriteFileParams {
+        path: absolute_path("tmp/example.bin"),
+        data_base64: "AAE=".to_string(),
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
+    assert_eq!(
+        value,
+        json!({
+            "path": absolute_path_string("tmp/example.bin"),
+            "dataBase64": "AAE=",
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsWriteFileParams>(value)
+        .expect("deserialize fs/writeFile params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn fs_copy_params_round_trip_with_recursive_directory_copy() {
+    let params = FsCopyParams {
+        source_path: absolute_path("tmp/source"),
+        destination_path: absolute_path("tmp/destination"),
+        recursive: true,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize fs/copy params");
+    assert_eq!(
+        value,
+        json!({
+            "sourcePath": absolute_path_string("tmp/source"),
+            "destinationPath": absolute_path_string("tmp/destination"),
+            "recursive": true,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<FsCopyParams>(value).expect("deserialize fs/copy params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn thread_shell_command_params_round_trip() {
+    let params = ThreadShellCommandParams {
+        thread_id: "thr_123".to_string(),
+        command: "printf 'hello world\\n'".to_string(),
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize thread/shellCommand params");
+    assert_eq!(
+        value,
+        json!({
+            "threadId": "thr_123",
+            "command": "printf 'hello world\\n'",
+        })
+    );
+
+    let decoded = serde_json::from_value::<ThreadShellCommandParams>(value)
+        .expect("deserialize thread/shellCommand params");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn thread_shell_command_response_round_trip() {
+    let response = ThreadShellCommandResponse {};
+
+    let value = serde_json::to_value(&response).expect("serialize thread/shellCommand response");
+    assert_eq!(value, json!({}));
+
+    let decoded = serde_json::from_value::<ThreadShellCommandResponse>(value)
+        .expect("deserialize thread/shellCommand response");
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn fs_changed_notification_round_trips() {
+    let notification = FsChangedNotification {
+        watch_id: "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1".to_string(),
+        changed_paths: vec![
+            absolute_path("tmp/repo/.git/HEAD"),
+            absolute_path("tmp/repo/.git/FETCH_HEAD"),
+        ],
+    };
+
+    let value = serde_json::to_value(&notification).expect("serialize fs/changed notification");
+    assert_eq!(
+        value,
+        json!({
+            "watchId": "0195ec6b-1d6f-7c2e-8c7a-56f2c4a8b9d1",
+            "changedPaths": [
+                absolute_path_string("tmp/repo/.git/HEAD"),
+                absolute_path_string("tmp/repo/.git/FETCH_HEAD"),
+            ],
+        })
+    );
+
+    let decoded = serde_json::from_value::<FsChangedNotification>(value)
+        .expect("deserialize fs/changed notification");
+    assert_eq!(decoded, notification);
+}
+
+#[test]
+fn command_exec_params_default_optional_streaming_flags() {
+    let params = serde_json::from_value::<CommandExecParams>(json!({
+        "command": ["ls", "-la"],
+        "timeoutMs": 1000,
+        "cwd": "/tmp"
+    }))
+    .expect("command/exec payload should deserialize");
+
+    assert_eq!(
+        params,
+        CommandExecParams {
+            command: vec!["ls".to_string(), "-la".to_string()],
+            process_id: None,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: Some(1000),
+            cwd: Some(PathBuf::from("/tmp")),
+            env: None,
+            size: None,
+            sandbox_policy: None,
+            permission_profile: None,
+        }
+    );
+}
+
+#[test]
+fn command_exec_params_round_trips_disable_timeout() {
+    let params = CommandExecParams {
+        command: vec!["sleep".to_string(), "30".to_string()],
+        process_id: Some("sleep-1".to_string()),
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        disable_output_cap: false,
+        disable_timeout: true,
+        timeout_ms: None,
+        cwd: None,
+        env: None,
+        size: None,
+        sandbox_policy: None,
+        permission_profile: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec params");
+    assert_eq!(
+        value,
+        json!({
+            "command": ["sleep", "30"],
+            "processId": "sleep-1",
+            "disableTimeout": true,
+            "timeoutMs": null,
+            "cwd": null,
+            "env": null,
+            "size": null,
+            "sandboxPolicy": null,
+            "permissionProfile": null,
+            "outputBytesCap": null,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn process_spawn_params_round_trips_without_sandbox_policy() {
+    let params = ProcessSpawnParams {
+        command: vec!["sleep".to_string(), "30".to_string()],
+        process_handle: "sleep-1".to_string(),
+        cwd: test_absolute_path(),
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        timeout_ms: None,
+        env: None,
+        size: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize process/spawn params");
+    assert_eq!(
+        value,
+        json!({
+            "command": ["sleep", "30"],
+            "processHandle": "sleep-1",
+            "cwd": absolute_path_string("readable"),
+            "env": null,
+            "size": null,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<ProcessSpawnParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn process_spawn_params_distinguish_omitted_null_and_value_limits() {
+    let base = json!({
+        "command": ["sleep", "30"],
+        "processHandle": "sleep-1",
+        "cwd": absolute_path_string("readable"),
+    });
+
+    let expected_omitted = ProcessSpawnParams {
+        command: vec!["sleep".to_string(), "30".to_string()],
+        process_handle: "sleep-1".to_string(),
+        cwd: test_absolute_path(),
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        timeout_ms: None,
+        env: None,
+        size: None,
+    };
+    let decoded =
+        serde_json::from_value::<ProcessSpawnParams>(base).expect("deserialize omitted limits");
+    assert_eq!(decoded, expected_omitted);
+
+    let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+        "command": ["sleep", "30"],
+        "processHandle": "sleep-1",
+        "cwd": absolute_path_string("readable"),
+        "outputBytesCap": null,
+        "timeoutMs": null,
+    }))
+    .expect("deserialize disabled limits");
+    assert_eq!(
+        decoded,
+        ProcessSpawnParams {
+            output_bytes_cap: Some(None),
+            timeout_ms: Some(None),
+            ..expected_omitted.clone()
+        }
+    );
+
+    let decoded = serde_json::from_value::<ProcessSpawnParams>(json!({
+        "command": ["sleep", "30"],
+        "processHandle": "sleep-1",
+        "cwd": absolute_path_string("readable"),
+        "outputBytesCap": 123,
+        "timeoutMs": 456,
+    }))
+    .expect("deserialize explicit limits");
+    assert_eq!(
+        decoded,
+        ProcessSpawnParams {
+            output_bytes_cap: Some(Some(123)),
+            timeout_ms: Some(Some(456)),
+            ..expected_omitted
+        }
+    );
+}
+
+#[test]
+fn command_exec_params_round_trips_disable_output_cap() {
+    let params = CommandExecParams {
+        command: vec!["yes".to_string()],
+        process_id: Some("yes-1".to_string()),
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: true,
+        output_bytes_cap: None,
+        disable_output_cap: true,
+        disable_timeout: false,
+        timeout_ms: None,
+        cwd: None,
+        env: None,
+        size: None,
+        sandbox_policy: None,
+        permission_profile: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec params");
+    assert_eq!(
+        value,
+        json!({
+            "command": ["yes"],
+            "processId": "yes-1",
+            "streamStdoutStderr": true,
+            "outputBytesCap": null,
+            "disableOutputCap": true,
+            "timeoutMs": null,
+            "cwd": null,
+            "env": null,
+            "size": null,
+            "sandboxPolicy": null,
+            "permissionProfile": null,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn command_exec_params_round_trips_env_overrides_and_unsets() {
+    let params = CommandExecParams {
+        command: vec!["printenv".to_string(), "FOO".to_string()],
+        process_id: Some("env-1".to_string()),
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        disable_output_cap: false,
+        disable_timeout: false,
+        timeout_ms: None,
+        cwd: None,
+        env: Some(HashMap::from([
+            ("FOO".to_string(), Some("override".to_string())),
+            ("BAR".to_string(), Some("added".to_string())),
+            ("BAZ".to_string(), None),
+        ])),
+        size: None,
+        sandbox_policy: None,
+        permission_profile: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec params");
+    assert_eq!(
+        value,
+        json!({
+            "command": ["printenv", "FOO"],
+            "processId": "env-1",
+            "outputBytesCap": null,
+            "timeoutMs": null,
+            "cwd": null,
+            "env": {
+                "FOO": "override",
+                "BAR": "added",
+                "BAZ": null,
+            },
+            "size": null,
+            "sandboxPolicy": null,
+            "permissionProfile": null,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn command_exec_write_round_trips_close_only_payload() {
+    let params = CommandExecWriteParams {
+        process_id: "proc-7".to_string(),
+        delta_base64: None,
+        close_stdin: true,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec/write params");
+    assert_eq!(
+        value,
+        json!({
+            "processId": "proc-7",
+            "deltaBase64": null,
+            "closeStdin": true,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<CommandExecWriteParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn command_exec_terminate_round_trips() {
+    let params = CommandExecTerminateParams {
+        process_id: "proc-8".to_string(),
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec/terminate params");
+    assert_eq!(
+        value,
+        json!({
+            "processId": "proc-8",
+        })
+    );
+
+    let decoded = serde_json::from_value::<CommandExecTerminateParams>(value)
+        .expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn command_exec_params_round_trip_with_size() {
+    let params = CommandExecParams {
+        command: vec!["top".to_string()],
+        process_id: Some("pty-1".to_string()),
+        tty: true,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: None,
+        disable_output_cap: false,
+        disable_timeout: false,
+        timeout_ms: None,
+        cwd: None,
+        env: None,
+        size: Some(CommandExecTerminalSize {
+            rows: 40,
+            cols: 120,
+        }),
+        sandbox_policy: None,
+        permission_profile: None,
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec params");
+    assert_eq!(
+        value,
+        json!({
+            "command": ["top"],
+            "processId": "pty-1",
+            "tty": true,
+            "outputBytesCap": null,
+            "timeoutMs": null,
+            "cwd": null,
+            "env": null,
+            "size": {
+                "rows": 40,
+                "cols": 120,
+            },
+            "sandboxPolicy": null,
+            "permissionProfile": null,
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn command_exec_resize_round_trips() {
+    let params = CommandExecResizeParams {
+        process_id: "proc-9".to_string(),
+        size: CommandExecTerminalSize {
+            rows: 50,
+            cols: 160,
+        },
+    };
+
+    let value = serde_json::to_value(&params).expect("serialize command/exec/resize params");
+    assert_eq!(
+        value,
+        json!({
+            "processId": "proc-9",
+            "size": {
+                "rows": 50,
+                "cols": 160,
+            },
+        })
+    );
+
+    let decoded =
+        serde_json::from_value::<CommandExecResizeParams>(value).expect("deserialize round-trip");
+    assert_eq!(decoded, params);
+}
+
+#[test]
+fn command_exec_output_delta_round_trips() {
+    let notification = CommandExecOutputDeltaNotification {
+        process_id: "proc-1".to_string(),
+        stream: CommandExecOutputStream::Stdout,
+        delta_base64: "AQI=".to_string(),
+        cap_reached: false,
+    };
+
+    let value = serde_json::to_value(&notification)
+        .expect("serialize command/exec/outputDelta notification");
+    assert_eq!(
+        value,
+        json!({
+            "processId": "proc-1",
+            "stream": "stdout",
+            "deltaBase64": "AQI=",
+            "capReached": false,
+        })
+    );
+
+    let decoded = serde_json::from_value::<CommandExecOutputDeltaNotification>(value)
+        .expect("deserialize round-trip");
+    assert_eq!(decoded, notification);
+}
+
+#[test]
+fn process_control_params_round_trip() {
+    let write = ProcessWriteStdinParams {
+        process_handle: "proc-7".to_string(),
+        delta_base64: None,
+        close_stdin: true,
+    };
+    let value = serde_json::to_value(&write).expect("serialize process/writeStdin params");
+    assert_eq!(
+        value,
+        json!({
+            "processHandle": "proc-7",
+            "deltaBase64": null,
+            "closeStdin": true,
+        })
+    );
+    let decoded = serde_json::from_value::<ProcessWriteStdinParams>(value)
+        .expect("deserialize process/writeStdin params");
+    assert_eq!(decoded, write);
+
+    let resize = ProcessResizePtyParams {
+        process_handle: "proc-7".to_string(),
+        size: ProcessTerminalSize {
+            rows: 50,
+            cols: 160,
+        },
+    };
+    let value = serde_json::to_value(&resize).expect("serialize process/resizePty params");
+    assert_eq!(
+        value,
+        json!({
+            "processHandle": "proc-7",
+            "size": {
+                "rows": 50,
+                "cols": 160,
+            },
+        })
+    );
+    let decoded = serde_json::from_value::<ProcessResizePtyParams>(value)
+        .expect("deserialize process/resizePty params");
+    assert_eq!(decoded, resize);
+
+    let kill = ProcessKillParams {
+        process_handle: "proc-7".to_string(),
+    };
+    let value = serde_json::to_value(&kill).expect("serialize process/kill params");
+    assert_eq!(
+        value,
+        json!({
+            "processHandle": "proc-7",
+        })
+    );
+    let decoded =
+        serde_json::from_value::<ProcessKillParams>(value).expect("deserialize process/kill");
+    assert_eq!(decoded, kill);
+}
+
+#[test]
+fn process_notifications_round_trip() {
+    let delta = ProcessOutputDeltaNotification {
+        process_handle: "proc-1".to_string(),
+        stream: ProcessOutputStream::Stdout,
+        delta_base64: "AQI=".to_string(),
+        cap_reached: false,
+    };
+    let value = serde_json::to_value(&delta).expect("serialize process/outputDelta");
+    assert_eq!(
+        value,
+        json!({
+            "processHandle": "proc-1",
+            "stream": "stdout",
+            "deltaBase64": "AQI=",
+            "capReached": false,
+        })
+    );
+    let decoded = serde_json::from_value::<ProcessOutputDeltaNotification>(value)
+        .expect("deserialize process/outputDelta");
+    assert_eq!(decoded, delta);
+
+    let exited = ProcessExitedNotification {
+        process_handle: "proc-1".to_string(),
+        exit_code: 0,
+        stdout: "out".to_string(),
+        stdout_cap_reached: false,
+        stderr: "err".to_string(),
+        stderr_cap_reached: true,
+    };
+    let value = serde_json::to_value(&exited).expect("serialize process/exited");
+    assert_eq!(
+        value,
+        json!({
+            "processHandle": "proc-1",
+            "exitCode": 0,
+            "stdout": "out",
+            "stdoutCapReached": false,
+            "stderr": "err",
+            "stderrCapReached": true,
+        })
+    );
+    let decoded = serde_json::from_value::<ProcessExitedNotification>(value)
+        .expect("deserialize process/exited");
+    assert_eq!(decoded, exited);
+}
+
+#[test]
+fn command_execution_output_delta_round_trips() {
+    let notification = CommandExecutionOutputDeltaNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        item_id: "item-1".to_string(),
+        delta: "\u{fffd}a\n".to_string(),
+    };
+
+    let value = serde_json::to_value(&notification)
+        .expect("serialize item/commandExecution/outputDelta notification");
+    assert_eq!(
+        value,
+        json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "item-1",
+            "delta": "\u{fffd}a\n",
+        })
+    );
+
+    let decoded = serde_json::from_value::<CommandExecutionOutputDeltaNotification>(value)
+        .expect("deserialize round-trip");
+    assert_eq!(decoded, notification);
+}
+
+#[test]
+fn sandbox_policy_round_trips_external_sandbox_network_access() {
+    let v2_policy = SandboxPolicy::ExternalSandbox {
+        network_access: NetworkAccess::Enabled,
+    };
+
+    let core_policy = v2_policy.to_core();
+    assert_eq!(
+        core_policy,
+        forall_protocol::protocol::SandboxPolicy::ExternalSandbox {
+            network_access: CoreNetworkAccess::Enabled,
+        }
+    );
+
+    let back_to_v2 = SandboxPolicy::from(core_policy);
+    assert_eq!(back_to_v2, v2_policy);
+}
+
+#[test]
+fn sandbox_policy_round_trips_read_only_network_access() {
+    let v2_policy = SandboxPolicy::ReadOnly {
+        network_access: true,
+    };
+
+    let core_policy = v2_policy.to_core();
+    assert_eq!(
+        core_policy,
+        forall_protocol::protocol::SandboxPolicy::ReadOnly {
+            network_access: true,
+        }
+    );
+
+    let back_to_v2 = SandboxPolicy::from(core_policy);
+    assert_eq!(back_to_v2, v2_policy);
+}
+
+#[test]
+fn ask_for_approval_granular_round_trips_request_permissions_flag() {
+    let v2_policy = AskForApproval::Granular {
+        sandbox_approval: true,
+        rules: false,
+        skill_approval: false,
+        request_permissions: true,
+        mcp_elicitations: false,
+    };
+
+    let core_policy = v2_policy.to_core();
+    assert_eq!(
+        core_policy,
+        CoreAskForApproval::Granular(CoreGranularApprovalConfig {
+            sandbox_approval: true,
+            rules: false,
+            skill_approval: false,
+            request_permissions: true,
+            mcp_elicitations: false,
+        })
+    );
+
+    let back_to_v2 = AskForApproval::from(core_policy);
+    assert_eq!(back_to_v2, v2_policy);
+}
+
+#[test]
+fn ask_for_approval_granular_defaults_missing_optional_flags_to_false() {
+    let decoded = serde_json::from_value::<AskForApproval>(serde_json::json!({
+        "granular": {
+            "sandbox_approval": true,
+            "rules": false,
+            "mcp_elicitations": true,
+        }
+    }))
+    .expect("granular approval policy should deserialize");
+
+    assert_eq!(
+        decoded,
+        AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: false,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }
+    );
+}
+
+#[test]
+fn ask_for_approval_granular_is_marked_experimental() {
+    let reason =
+        crate::experimental_api::ExperimentalApi::experimental_reason(&AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: false,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        });
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&AskForApproval::OnRequest,),
+        None
+    );
+}
+
+#[test]
+fn config_granular_approval_policy_is_marked_experimental() {
+    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+        model: None,
+        review_model: None,
+        model_context_window: None,
+        model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: None,
+        model_provider: None,
+        approval_policy: Some(AskForApproval::Granular {
+            sandbox_approval: false,
+            rules: true,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }),
+        approvals_reviewer: None,
+        sandbox_mode: None,
+        sandbox_workspace_write: None,
+        forced_login_method: None,
+        web_search: None,
+        tools: None,
+        instructions: None,
+        developer_instructions: None,
+        compact_prompt: None,
+        model_reasoning_effort: None,
+        model_reasoning_summary: None,
+        model_verbosity: None,
+        service_tier: None,
+        analytics: None,
+        apps: None,
+        desktop: None,
+        additional: HashMap::new(),
+    });
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+}
+
+#[test]
+fn config_approvals_reviewer_is_marked_experimental() {
+    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+        model: None,
+        review_model: None,
+        model_context_window: None,
+        model_auto_compact_token_limit: None,
+        model_auto_compact_token_limit_scope: None,
+        model_provider: None,
+        approval_policy: None,
+        approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+        sandbox_mode: None,
+        sandbox_workspace_write: None,
+        forced_login_method: None,
+        web_search: None,
+        tools: None,
+        instructions: None,
+        developer_instructions: None,
+        compact_prompt: None,
+        model_reasoning_effort: None,
+        model_reasoning_summary: None,
+        model_verbosity: None,
+        service_tier: None,
+        analytics: None,
+        apps: None,
+        desktop: None,
+        additional: HashMap::new(),
+    });
+
+    assert_eq!(reason, Some("config/read.approvalsReviewer"));
+}
+
+#[test]
+fn config_requirements_granular_allowed_approval_policy_is_marked_experimental() {
+    let reason =
+        crate::experimental_api::ExperimentalApi::experimental_reason(&ConfigRequirements {
+            allowed_approval_policies: Some(vec![AskForApproval::Granular {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: false,
+                request_permissions: false,
+                mcp_elicitations: false,
+            }]),
+            allowed_approvals_reviewers: None,
+            allowed_sandbox_modes: None,
+            allowed_windows_sandbox_implementations: None,
+            allowed_permission_profiles: None,
+            default_permissions: None,
+            allowed_web_search_modes: None,
+            allow_managed_hooks_only: None,
+            allow_appshots: None,
+            computer_use: None,
+            feature_requirements: None,
+            hooks: None,
+            enforce_residency: None,
+            network: None,
+        });
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+}
+
+#[test]
+fn client_request_thread_start_granular_approval_policy_is_marked_experimental() {
+    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
+        &crate::ClientRequest::ThreadStart {
+            request_id: crate::RequestId::Integer(1),
+            params: ThreadStartParams {
+                approval_policy: Some(AskForApproval::Granular {
+                    sandbox_approval: true,
+                    rules: false,
+                    skill_approval: false,
+                    request_permissions: true,
+                    mcp_elicitations: false,
+                }),
+                ..Default::default()
+            },
+        },
+    );
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+}
+
+#[test]
+fn client_request_thread_resume_granular_approval_policy_is_marked_experimental() {
+    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
+        &crate::ClientRequest::ThreadResume {
+            request_id: crate::RequestId::Integer(2),
+            params: ThreadResumeParams {
+                thread_id: "thr_123".to_string(),
+                approval_policy: Some(AskForApproval::Granular {
+                    sandbox_approval: false,
+                    rules: true,
+                    skill_approval: false,
+                    request_permissions: false,
+                    mcp_elicitations: true,
+                }),
+                ..Default::default()
+            },
+        },
+    );
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+}
+
+#[test]
+fn client_request_thread_fork_granular_approval_policy_is_marked_experimental() {
+    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
+        &crate::ClientRequest::ThreadFork {
+            request_id: crate::RequestId::Integer(3),
+            params: ThreadForkParams {
+                thread_id: "thr_456".to_string(),
+                approval_policy: Some(AskForApproval::Granular {
+                    sandbox_approval: true,
+                    rules: false,
+                    skill_approval: false,
+                    request_permissions: false,
+                    mcp_elicitations: true,
+                }),
+                ..Default::default()
+            },
+        },
+    );
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+}
+
+#[test]
+fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
+    let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
+        &crate::ClientRequest::TurnStart {
+            request_id: crate::RequestId::Integer(4),
+            params: TurnStartParams {
+                thread_id: "thr_123".to_string(),
+                client_user_message_id: None,
+                input: Vec::new(),
+                approval_policy: Some(AskForApproval::Granular {
+                    sandbox_approval: false,
+                    rules: true,
+                    skill_approval: false,
+                    request_permissions: false,
+                    mcp_elicitations: true,
+                }),
+                ..Default::default()
+            },
+        },
+    );
+
+    assert_eq!(reason, Some("askForApproval.granular"));
+}
+
+#[test]
+fn mcp_server_elicitation_response_round_trips_rmcp_result() {
+    let rmcp_result = rmcp::model::CreateElicitationResult {
+        action: rmcp::model::ElicitationAction::Accept,
+        content: Some(json!({
+            "confirmed": true,
+        })),
+        meta: None,
+    };
+
+    let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());
+    assert_eq!(
+        v2_response,
+        McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(json!({
+                "confirmed": true,
+            })),
+            meta: None,
+        }
+    );
+    assert_eq!(
+        rmcp::model::CreateElicitationResult::from(v2_response),
+        rmcp_result
+    );
+}
+
+#[test]
+fn mcp_server_elicitation_request_from_core_url_request() {
+    let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Url {
+        meta: None,
+        message: "Finish sign-in".to_string(),
+        url: "https://example.com/complete".to_string(),
+        elicitation_id: "elicitation-123".to_string(),
+    })
+    .expect("URL request should convert");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::Url {
+            meta: None,
+            message: "Finish sign-in".to_string(),
+            url: "https://example.com/complete".to_string(),
+            elicitation_id: "elicitation-123".to_string(),
+        }
+    );
+}
+
+#[test]
+fn mcp_server_elicitation_request_from_core_form_request() {
+    let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
+        meta: None,
+        message: "Allow this request?".to_string(),
+        requested_schema: json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "boolean",
+                }
+            },
+            "required": ["confirmed"],
+        }),
+    })
+    .expect("form request should convert");
+
+    let expected_schema: McpElicitationSchema = serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "confirmed": {
+                "type": "boolean",
+            }
+        },
+        "required": ["confirmed"],
+    }))
+    .expect("expected schema should deserialize");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::Form {
+            meta: None,
+            message: "Allow this request?".to_string(),
+            requested_schema: expected_schema,
+        }
+    );
+}
+
+#[test]
+fn mcp_server_elicitation_request_from_core_openai_form_request() {
+    let requested_schema = json!({
+        "type": "object",
+        "properties": {
+            "template": {
+                "type": "openai/imagePicker",
+                "title": "Template",
+                "items": [{
+                    "id": "monthly-review",
+                    "title": "Monthly review",
+                    "image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=",
+                }],
+            },
+        },
+        "required": ["template"],
+    });
+    let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::OpenAiForm {
+        meta: None,
+        message: "Choose a report".to_string(),
+        requested_schema: requested_schema.clone(),
+    })
+    .expect("OpenAI form request should convert");
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequest::OpenAiForm {
+            meta: None,
+            message: "Choose a report".to_string(),
+            requested_schema,
+        }
+    );
+}
+
+#[test]
+fn mcp_elicitation_schema_matches_mcp_2025_11_25_primitives() {
+    let schema: McpElicitationSchema = serde_json::from_value(json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "email": {
+                "type": "string",
+                "title": "Email",
+                "description": "Work email address",
+                "format": "email",
+                "default": "dev@example.com",
+            },
+            "count": {
+                "type": "integer",
+                "title": "Count",
+                "description": "How many items to create",
+                "minimum": 1,
+                "maximum": 5,
+                "default": 3,
+            },
+            "confirmed": {
+                "type": "boolean",
+                "title": "Confirm",
+                "description": "Approve the pending action",
+                "default": true,
+            },
+            "legacyChoice": {
+                "type": "string",
+                "title": "Action",
+                "description": "Legacy titled enum form",
+                "enum": ["allow", "deny"],
+                "enumNames": ["Allow", "Deny"],
+                "default": "allow",
+            },
+        },
+        "required": ["email", "confirmed"],
+    }))
+    .expect("schema should deserialize");
+
+    assert_eq!(
+        schema,
+        McpElicitationSchema {
+            schema_uri: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+            type_: McpElicitationObjectType::Object,
+            properties: BTreeMap::from([
+                (
+                    "confirmed".to_string(),
+                    McpElicitationPrimitiveSchema::Boolean(McpElicitationBooleanSchema {
+                        type_: McpElicitationBooleanType::Boolean,
+                        title: Some("Confirm".to_string()),
+                        description: Some("Approve the pending action".to_string()),
+                        default: Some(true),
+                    }),
+                ),
+                (
+                    "count".to_string(),
+                    McpElicitationPrimitiveSchema::Number(McpElicitationNumberSchema {
+                        type_: McpElicitationNumberType::Integer,
+                        title: Some("Count".to_string()),
+                        description: Some("How many items to create".to_string()),
+                        minimum: Some(1.0),
+                        maximum: Some(5.0),
+                        default: Some(3.0),
+                    }),
+                ),
+                (
+                    "email".to_string(),
+                    McpElicitationPrimitiveSchema::String(McpElicitationStringSchema {
+                        type_: McpElicitationStringType::String,
+                        title: Some("Email".to_string()),
+                        description: Some("Work email address".to_string()),
+                        min_length: None,
+                        max_length: None,
+                        format: Some(McpElicitationStringFormat::Email),
+                        default: Some("dev@example.com".to_string()),
+                    }),
+                ),
+                (
+                    "legacyChoice".to_string(),
+                    McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::Legacy(
+                        McpElicitationLegacyTitledEnumSchema {
+                            type_: McpElicitationStringType::String,
+                            title: Some("Action".to_string()),
+                            description: Some("Legacy titled enum form".to_string()),
+                            enum_: vec!["allow".to_string(), "deny".to_string()],
+                            enum_names: Some(vec!["Allow".to_string(), "Deny".to_string(),]),
+                            default: Some("allow".to_string()),
+                        },
+                    )),
+                ),
+            ]),
+            required: Some(vec!["email".to_string(), "confirmed".to_string()]),
+        }
+    );
+}
+
+#[test]
+fn mcp_server_elicitation_request_rejects_null_core_form_schema() {
+    let result = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
+        meta: Some(json!({
+            "persist": "session",
+        })),
+        message: "Allow this request?".to_string(),
+        requested_schema: JsonValue::Null,
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn mcp_server_elicitation_request_rejects_invalid_core_form_schema() {
+    let result = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
+        meta: None,
+        message: "Allow this request?".to_string(),
+        requested_schema: json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "object",
+                }
+            },
+        }),
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn mcp_server_elicitation_response_serializes_nullable_content() {
+    let response = McpServerElicitationRequestResponse {
+        action: McpServerElicitationAction::Decline,
+        content: None,
+        meta: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "action": "decline",
+            "content": null,
+            "_meta": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_serializes_absent_server_info_as_null() {
+    let response = ListMcpServerStatusResponse {
+        data: vec![McpServerStatus {
+            name: "not-ready".to_string(),
+            server_info: None,
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: McpAuthStatus::Unsupported,
+        }],
+        next_cursor: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "data": [{
+                "name": "not-ready",
+                "serverInfo": null,
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": [],
+                "authStatus": "unsupported",
+            }],
+            "nextCursor": null,
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_updated_accepts_missing_thread_id() {
+    let notification: McpServerStatusUpdatedNotification = serde_json::from_value(json!({
+        "name": "optional_broken",
+        "status": "failed",
+        "error": "handshake failed",
+    }))
+    .expect("notification without threadId should deserialize");
+
+    let expected = McpServerStatusUpdatedNotification {
+        thread_id: None,
+        name: "optional_broken".to_string(),
+        status: McpServerStartupState::Failed,
+        error: Some("handshake failed".to_string()),
+    };
+    assert_eq!(notification, expected);
+    assert_eq!(
+        serde_json::to_value(notification).expect("notification should serialize"),
+        json!({
+            "threadId": null,
+            "name": "optional_broken",
+            "status": "failed",
+            "error": "handshake failed",
+        })
+    );
+}
+
+#[test]
+fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
+    let response = ListMcpServerStatusResponse {
+        data: vec![McpServerStatus {
+            name: "initialized".to_string(),
+            server_info: Some(McpServerInfo {
+                name: "lookup-server".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
+                description: None,
+                icons: None,
+                website_url: None,
+            }),
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: McpAuthStatus::Unsupported,
+        }],
+        next_cursor: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(response).expect("response should serialize"),
+        json!({
+            "data": [{
+                "name": "initialized",
+                "serverInfo": {
+                    "name": "lookup-server",
+                    "title": null,
+                    "version": "1.0.0",
+                    "description": null,
+                    "icons": null,
+                    "websiteUrl": null,
+                },
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": [],
+                "authStatus": "unsupported",
+            }],
+            "nextCursor": null,
+        })
+    );
+}
+
+#[test]
+fn sandbox_policy_round_trips_workspace_write_access() {
+    let v2_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: true,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    let core_policy = v2_policy.to_core();
+    assert_eq!(
+        core_policy,
+        forall_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        }
+    );
+
+    let back_to_v2 = SandboxPolicy::from(core_policy);
+    assert_eq!(back_to_v2, v2_policy);
+}
+
+#[test]
+fn sandbox_policy_deserializes_legacy_read_only_full_access_field() {
+    let policy = serde_json::from_value::<SandboxPolicy>(json!({
+        "type": "readOnly",
+        "access": {
+            "type": "fullAccess"
+        },
+        "networkAccess": true
+    }))
+    .expect("read-only policy should ignore legacy fullAccess field");
+    assert_eq!(
+        policy,
+        SandboxPolicy::ReadOnly {
+            network_access: true
+        }
+    );
+}
+
+#[test]
+fn sandbox_policy_deserializes_legacy_workspace_write_full_access_field() {
+    let writable_root = absolute_path("/workspace");
+    let policy = serde_json::from_value::<SandboxPolicy>(json!({
+        "type": "workspaceWrite",
+        "writableRoots": [writable_root],
+        "readOnlyAccess": {
+            "type": "fullAccess"
+        },
+        "networkAccess": true,
+        "excludeTmpdirEnvVar": true,
+        "excludeSlashTmp": true
+    }))
+    .expect("workspace-write policy should ignore legacy fullAccess field");
+    assert_eq!(
+        policy,
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![absolute_path("/workspace")],
+            network_access: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
+    );
+}
+
+#[test]
+fn sandbox_policy_rejects_legacy_read_only_restricted_access_field() {
+    let err = serde_json::from_value::<SandboxPolicy>(json!({
+        "type": "readOnly",
+        "access": {
+            "type": "restricted",
+            "includePlatformDefaults": false,
+            "readableRoots": []
+        }
+    }))
+    .expect_err("read-only policy should reject removed restricted access field");
+    assert!(err.to_string().contains("readOnly.access"));
+}
+
+#[test]
+fn sandbox_policy_rejects_legacy_workspace_write_restricted_read_access_field() {
+    let err = serde_json::from_value::<SandboxPolicy>(json!({
+        "type": "workspaceWrite",
+        "writableRoots": [],
+        "readOnlyAccess": {
+            "type": "restricted",
+            "includePlatformDefaults": false,
+            "readableRoots": []
+        },
+        "networkAccess": false,
+        "excludeTmpdirEnvVar": false,
+        "excludeSlashTmp": false
+    }))
+    .expect_err("workspace-write policy should reject removed restricted readOnlyAccess field");
+    assert!(err.to_string().contains("workspaceWrite.readOnlyAccess"));
+}
+
+#[test]
+fn automatic_approval_review_deserializes_aborted_status() {
+    let review: GuardianApprovalReview = serde_json::from_value(json!({
+        "status": "aborted",
+        "riskLevel": null,
+        "userAuthorization": null,
+        "rationale": null
+    }))
+    .expect("aborted automatic review should deserialize");
+    assert_eq!(
+        review,
+        GuardianApprovalReview {
+            status: GuardianApprovalReviewStatus::Aborted,
+            risk_level: None,
+            user_authorization: None,
+            rationale: None,
+        }
+    );
+}
+
+#[test]
+fn guardian_approval_review_action_round_trips_command_shape() {
+    let value = json!({
+        "type": "command",
+        "source": "shell",
+        "command": "rm -rf /tmp/example.sqlite",
+        "cwd": absolute_path_string("tmp"),
+    });
+    let action: GuardianApprovalReviewAction =
+        serde_json::from_value(value.clone()).expect("guardian review action");
+
+    assert_eq!(
+        action,
+        GuardianApprovalReviewAction::Command {
+            source: GuardianCommandSource::Shell,
+            command: "rm -rf /tmp/example.sqlite".to_string(),
+            cwd: absolute_path("tmp"),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&action).expect("serialize guardian review action"),
+        value
+    );
+}
+
+#[test]
+fn network_requirements_deserializes_legacy_fields() {
+    let requirements: NetworkRequirements = serde_json::from_value(json!({
+        "allowedDomains": ["api.openai.com"],
+        "deniedDomains": ["blocked.example.com"],
+        "allowUnixSockets": ["/tmp/proxy.sock"]
+    }))
+    .expect("legacy network requirements should deserialize");
+
+    assert_eq!(
+        requirements,
+        NetworkRequirements {
+            enabled: None,
+            http_port: None,
+            socks_port: None,
+            allow_upstream_proxy: None,
+            dangerously_allow_non_loopback_proxy: None,
+            dangerously_allow_all_unix_sockets: None,
+            domains: None,
+            managed_allowed_domains_only: None,
+            allowed_domains: Some(vec!["api.openai.com".to_string()]),
+            denied_domains: Some(vec!["blocked.example.com".to_string()]),
+            unix_sockets: None,
+            allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+            allow_local_binding: None,
+        }
+    );
+}
+
+#[test]
+fn network_requirements_serializes_canonical_and_legacy_fields() {
+    let requirements = NetworkRequirements {
+        enabled: Some(true),
+        http_port: Some(8080),
+        socks_port: Some(1080),
+        allow_upstream_proxy: Some(false),
+        dangerously_allow_non_loopback_proxy: Some(false),
+        dangerously_allow_all_unix_sockets: Some(true),
+        domains: Some(BTreeMap::from([
+            ("api.openai.com".to_string(), NetworkDomainPermission::Allow),
+            (
+                "blocked.example.com".to_string(),
+                NetworkDomainPermission::Deny,
+            ),
+        ])),
+        managed_allowed_domains_only: Some(true),
+        allowed_domains: Some(vec!["api.openai.com".to_string()]),
+        denied_domains: Some(vec!["blocked.example.com".to_string()]),
+        unix_sockets: Some(BTreeMap::from([
+            (
+                "/tmp/proxy.sock".to_string(),
+                NetworkUnixSocketPermission::Allow,
+            ),
+            (
+                "/tmp/ignored.sock".to_string(),
+                NetworkUnixSocketPermission::Deny,
+            ),
+        ])),
+        allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+        allow_local_binding: Some(true),
+    };
+
+    assert_eq!(
+        serde_json::to_value(requirements).expect("network requirements should serialize"),
+        json!({
+            "enabled": true,
+            "httpPort": 8080,
+            "socksPort": 1080,
+            "allowUpstreamProxy": false,
+            "dangerouslyAllowNonLoopbackProxy": false,
+            "dangerouslyAllowAllUnixSockets": true,
+            "domains": {
+                "api.openai.com": "allow",
+                "blocked.example.com": "deny"
+            },
+            "managedAllowedDomainsOnly": true,
+            "allowedDomains": ["api.openai.com"],
+            "deniedDomains": ["blocked.example.com"],
+            "unixSockets": {
+                "/tmp/ignored.sock": "deny",
+                "/tmp/proxy.sock": "allow"
+            },
+            "allowUnixSockets": ["/tmp/proxy.sock"],
+            "allowLocalBinding": true
+        })
+    );
+}
+
+#[test]
+fn core_turn_item_into_thread_item_converts_supported_variants() {
+    let user_item = TurnItem::UserMessage(UserMessageItem {
+        id: "user-1".to_string(),
+        client_id: Some("client-message-1".to_string()),
+        content: vec![
+            CoreUserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            },
+            CoreUserInput::Image {
+                image_url: "https://example.com/image.png".to_string(),
+                detail: Some(ImageDetail::Original),
+            },
+            CoreUserInput::LocalImage {
+                path: PathBuf::from("local/image.png"),
+                detail: Some(ImageDetail::Original),
+            },
+            CoreUserInput::Skill {
+                name: "skill-creator".to_string(),
+                path: PathBuf::from("/repo/.forall/skills/skill-creator/SKILL.md"),
+            },
+            CoreUserInput::Mention {
+                name: "Demo App".to_string(),
+                path: "app://demo-app".to_string(),
+            },
+        ],
+    });
+
+    assert_eq!(
+        ThreadItem::from(user_item),
+        ThreadItem::UserMessage {
+            id: "user-1".to_string(),
+            client_id: Some("client-message-1".to_string()),
+            content: vec![
+                UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Image {
+                    url: "https://example.com/image.png".to_string(),
+                    detail: Some(ImageDetail::Original),
+                },
+                UserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                    detail: Some(ImageDetail::Original),
+                },
+                UserInput::Skill {
+                    name: "skill-creator".to_string(),
+                    path: PathBuf::from("/repo/.forall/skills/skill-creator/SKILL.md"),
+                },
+                UserInput::Mention {
+                    name: "Demo App".to_string(),
+                    path: "app://demo-app".to_string(),
+                },
+            ],
+        }
+    );
+
+    let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+        id: "agent-1".to_string(),
+        content: vec![
+            AgentMessageContent::Text {
+                text: "Hello ".to_string(),
+            },
+            AgentMessageContent::Text {
+                text: "world".to_string(),
+            },
+        ],
+        phase: None,
+        memory_citation: None,
+    });
+
+    assert_eq!(
+        ThreadItem::from(agent_item),
+        ThreadItem::AgentMessage {
+            id: "agent-1".to_string(),
+            text: "Hello world".to_string(),
+            phase: None,
+            memory_citation: None,
+        }
+    );
+
+    let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
+        id: "agent-2".to_string(),
+        content: vec![AgentMessageContent::Text {
+            text: "final".to_string(),
+        }],
+        phase: Some(MessagePhase::FinalAnswer),
+        memory_citation: Some(CoreMemoryCitation {
+            entries: vec![CoreMemoryCitationEntry {
+                path: "MEMORY.md".to_string(),
+                line_start: 1,
+                line_end: 2,
+                note: "summary".to_string(),
+            }],
+            rollout_ids: vec!["rollout-1".to_string()],
+        }),
+    });
+
+    assert_eq!(
+        ThreadItem::from(agent_item_with_phase),
+        ThreadItem::AgentMessage {
+            id: "agent-2".to_string(),
+            text: "final".to_string(),
+            phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: Some(MemoryCitation {
+                entries: vec![MemoryCitationEntry {
+                    path: "MEMORY.md".to_string(),
+                    line_start: 1,
+                    line_end: 2,
+                    note: "summary".to_string(),
+                }],
+                thread_ids: vec!["rollout-1".to_string()],
+            }),
+        }
+    );
+
+    let reasoning_item = TurnItem::Reasoning(ReasoningItem {
+        id: "reasoning-1".to_string(),
+        summary_text: vec!["line one".to_string(), "line two".to_string()],
+        raw_content: vec![],
+    });
+
+    assert_eq!(
+        ThreadItem::from(reasoning_item),
+        ThreadItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec!["line one".to_string(), "line two".to_string()],
+            content: vec![],
+        }
+    );
+
+    let search_item = TurnItem::WebSearch(WebSearchItem {
+        id: "search-1".to_string(),
+        query: "docs".to_string(),
+        action: CoreWebSearchAction::Search {
+            query: Some("docs".to_string()),
+            queries: None,
+        },
+    });
+
+    assert_eq!(
+        ThreadItem::from(search_item),
+        ThreadItem::WebSearch {
+            id: "search-1".to_string(),
+            query: "docs".to_string(),
+            action: Some(WebSearchAction::Search {
+                query: Some("docs".to_string()),
+                queries: None,
+            }),
+        }
+    );
+
+    let image_view_item = TurnItem::ImageView(ImageViewItem {
+        id: "view-image-1".to_string(),
+        path: test_path_buf("/tmp/view-image.png").abs(),
+    });
+
+    assert_eq!(
+        ThreadItem::from(image_view_item),
+        ThreadItem::ImageView {
+            id: "view-image-1".to_string(),
+            path: test_path_buf("/tmp/view-image.png").abs(),
+        }
+    );
+
+    let file_change_item = TurnItem::FileChange(FileChangeItem {
+        id: "patch-1".to_string(),
+        changes: [(
+            PathBuf::from("README.md"),
+            forall_protocol::protocol::FileChange::Add {
+                content: "hello\n".to_string(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        status: Some(forall_protocol::protocol::PatchApplyStatus::Completed),
+        auto_approved: None,
+        stdout: Some("Done!".to_string()),
+        stderr: Some(String::new()),
+    });
+
+    assert_eq!(
+        ThreadItem::from(file_change_item),
+        ThreadItem::FileChange {
+            id: "patch-1".to_string(),
+            changes: vec![FileUpdateChange {
+                path: "README.md".to_string(),
+                kind: PatchChangeKind::Add,
+                diff: "hello\n".to_string(),
+            }],
+            status: PatchApplyStatus::Completed,
+        }
+    );
+
+    let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+        id: "mcp-1".to_string(),
+        server: "server".to_string(),
+        tool: "tool".to_string(),
+        arguments: json!({"arg": "value"}),
+        connector_id: Some("calendar".to_string()),
+        mcp_app_resource_uri: Some("app://connector".to_string()),
+        link_id: Some("link_calendar".to_string()),
+        plugin_id: Some("sample@test".to_string()),
+        status: CoreMcpToolCallStatus::InProgress,
+        result: None,
+        error: None,
+        duration: None,
+    });
+
+    assert_eq!(
+        ThreadItem::from(mcp_tool_call_item),
+        ThreadItem::McpToolCall {
+            id: "mcp-1".to_string(),
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            status: McpToolCallStatus::InProgress,
+            arguments: json!({"arg": "value"}),
+            app_context: Some(McpToolCallAppContext {
+                connector_id: "calendar".to_string(),
+                link_id: Some("link_calendar".to_string()),
+                resource_uri: Some("app://connector".to_string()),
+            }),
+            mcp_app_resource_uri: Some("app://connector".to_string()),
+            plugin_id: Some("sample@test".to_string()),
+            result: None,
+            error: None,
+            duration_ms: None,
+        }
+    );
+
+    let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
+        id: "mcp-2".to_string(),
+        server: "server".to_string(),
+        tool: "tool".to_string(),
+        arguments: JsonValue::Null,
+        connector_id: None,
+        mcp_app_resource_uri: None,
+        link_id: None,
+        plugin_id: None,
+        status: CoreMcpToolCallStatus::Completed,
+        result: Some(CallToolResult {
+            content: vec![json!({"type": "text", "text": "ok"})],
+            structured_content: Some(json!({"ok": true})),
+            is_error: Some(false),
+            meta: Some(json!({"trace": "1"})),
+        }),
+        error: None,
+        duration: Some(Duration::from_millis(42)),
+    });
+
+    assert_eq!(
+        ThreadItem::from(completed_mcp_tool_call_item),
+        ThreadItem::McpToolCall {
+            id: "mcp-2".to_string(),
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            status: McpToolCallStatus::Completed,
+            arguments: JsonValue::Null,
+            app_context: None,
+            mcp_app_resource_uri: None,
+            plugin_id: None,
+            result: Some(Box::new(McpToolCallResult {
+                content: vec![json!({"type": "text", "text": "ok"})],
+                structured_content: Some(json!({"ok": true})),
+                meta: Some(json!({"trace": "1"})),
+            })),
+            error: None,
+            duration_ms: Some(42),
+        }
+    );
+}
+
+#[test]
+fn mcp_tool_call_app_context_serializes_connector_id() {
+    let item = ThreadItem::McpToolCall {
+        id: "mcp-1".to_string(),
+        server: "forall_apps".to_string(),
+        tool: "calendar.create_event".to_string(),
+        status: McpToolCallStatus::InProgress,
+        arguments: json!({}),
+        app_context: Some(McpToolCallAppContext {
+            connector_id: "calendar".to_string(),
+            link_id: Some("link_calendar".to_string()),
+            resource_uri: Some("app://connector".to_string()),
+        }),
+        mcp_app_resource_uri: Some("app://connector".to_string()),
+        plugin_id: None,
+        result: None,
+        error: None,
+        duration_ms: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(item).expect("MCP tool call should serialize"),
+        json!({
+            "type": "mcpToolCall",
+            "id": "mcp-1",
+            "server": "forall_apps",
+            "tool": "calendar.create_event",
+            "status": "inProgress",
+            "arguments": {},
+            "appContext": {
+                "connectorId": "calendar",
+                "linkId": "link_calendar",
+                "resourceUri": "app://connector",
+            },
+            "mcpAppResourceUri": "app://connector",
+            "pluginId": null,
+            "result": null,
+            "error": null,
+            "durationMs": null,
+        })
+    );
+}
+
+#[test]
+fn user_input_into_core_preserves_image_detail() {
+    assert_eq!(
+        UserInput::Image {
+            url: "https://example.com/image.png".to_string(),
+            detail: Some(ImageDetail::Original),
+        }
+        .into_core(),
+        CoreUserInput::Image {
+            image_url: "https://example.com/image.png".to_string(),
+            detail: Some(ImageDetail::Original),
+        }
+    );
+
+    assert_eq!(
+        UserInput::LocalImage {
+            path: PathBuf::from("local/image.png"),
+            detail: Some(ImageDetail::Original),
+        }
+        .into_core(),
+        CoreUserInput::LocalImage {
+            path: PathBuf::from("local/image.png"),
+            detail: Some(ImageDetail::Original),
+        }
+    );
+}
+
+#[test]
+fn skills_list_params_serialization_uses_force_reload() {
+    assert_eq!(
+        serde_json::to_value(SkillsListParams {
+            cwds: Vec::new(),
+            force_reload: false,
+        })
+        .unwrap(),
+        json!({}),
+    );
+
+    assert_eq!(
+        serde_json::to_value(SkillsListParams {
+            cwds: vec![PathBuf::from("/repo")],
+            force_reload: true,
+        })
+        .unwrap(),
+        json!({
+            "cwds": ["/repo"],
+            "forceReload": true,
+        }),
+    );
+}
+
+#[test]
+fn skills_extra_roots_set_params_serialization_uses_extra_roots() {
+    assert_eq!(
+        serde_json::to_value(SkillsExtraRootsSetParams {
+            extra_roots: vec![absolute_path("tmp/skills")],
+        })
+        .unwrap(),
+        json!({
+            "extraRoots": [absolute_path_string("tmp/skills")],
+        }),
+    );
+}
+
+#[test]
+fn skills_extra_roots_set_params_rejects_relative_roots() {
+    let result = serde_json::from_value::<SkillsExtraRootsSetParams>(json!({
+        "extraRoots": ["relative/path"],
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn plugin_source_serializes_local_git_and_remote_variants() {
+    let local_path = if cfg!(windows) {
+        r"C:\plugins\linear"
+    } else {
+        "/plugins/linear"
+    };
+    let local_path = AbsolutePathBuf::try_from(PathBuf::from(local_path)).unwrap();
+    let local_path_json = local_path.as_path().display().to_string();
+
+    assert_eq!(
+        serde_json::to_value(PluginSource::Local { path: local_path }).unwrap(),
+        json!({
+            "type": "local",
+            "path": local_path_json,
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginSource::Git {
+            url: "https://github.com/openai/example.git".to_string(),
+            path: Some("plugins/example".to_string()),
+            ref_name: Some("main".to_string()),
+            sha: Some("abc123".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "type": "git",
+            "url": "https://github.com/openai/example.git",
+            "path": "plugins/example",
+            "refName": "main",
+            "sha": "abc123",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginSource::Remote).unwrap(),
+        json!({
+            "type": "remote",
+        }),
+    );
+}
+
+#[test]
+fn marketplace_add_params_serialization_uses_optional_ref_name_and_sparse_paths() {
+    assert_eq!(
+        serde_json::to_value(MarketplaceAddParams {
+            source: "owner/repo".to_string(),
+            ref_name: None,
+            sparse_paths: None,
+        })
+        .unwrap(),
+        json!({
+            "source": "owner/repo",
+            "refName": null,
+            "sparsePaths": null,
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(MarketplaceAddParams {
+            source: "owner/repo".to_string(),
+            ref_name: Some("main".to_string()),
+            sparse_paths: Some(vec!["plugins/foo".to_string()]),
+        })
+        .unwrap(),
+        json!({
+            "source": "owner/repo",
+            "refName": "main",
+            "sparsePaths": ["plugins/foo"],
+        }),
+    );
+}
+
+#[test]
+fn marketplace_upgrade_params_serialization_uses_optional_marketplace_name() {
+    assert_eq!(
+        serde_json::to_value(MarketplaceUpgradeParams {
+            marketplace_name: None,
+        })
+        .unwrap(),
+        json!({
+            "marketplaceName": null,
+        }),
+    );
+
+    assert_eq!(
+        serde_json::from_value::<MarketplaceUpgradeParams>(json!({})).unwrap(),
+        MarketplaceUpgradeParams {
+            marketplace_name: None,
+        },
+    );
+
+    assert_eq!(
+        serde_json::to_value(MarketplaceUpgradeParams {
+            marketplace_name: Some("debug".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "marketplaceName": "debug",
+        }),
+    );
+}
+
+#[test]
+fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
+    assert_eq!(
+        serde_json::to_value(PluginMarketplaceEntry {
+            name: "openai-curated-remote".to_string(),
+            path: None,
+            interface: None,
+            plugins: Vec::new(),
+        })
+        .unwrap(),
+        json!({
+            "name": "openai-curated-remote",
+            "path": null,
+            "interface": null,
+            "plugins": [],
+        }),
+    );
+}
+
+#[test]
+fn plugin_interface_serializes_local_paths_and_remote_urls_separately() {
+    let composer_icon = if cfg!(windows) {
+        r"C:\plugins\linear\icon.png"
+    } else {
+        "/plugins/linear/icon.png"
+    };
+    let composer_icon = AbsolutePathBuf::try_from(PathBuf::from(composer_icon)).unwrap();
+    let composer_icon_json = composer_icon.as_path().display().to_string();
+    let logo_dark = if cfg!(windows) {
+        r"C:\plugins\linear\logo-dark.png"
+    } else {
+        "/plugins/linear/logo-dark.png"
+    };
+    let logo_dark = AbsolutePathBuf::try_from(PathBuf::from(logo_dark)).unwrap();
+    let logo_dark_json = logo_dark.as_path().display().to_string();
+
+    let interface = PluginInterface {
+        display_name: Some("Linear".to_string()),
+        short_description: None,
+        long_description: None,
+        developer_name: None,
+        category: Some("Productivity".to_string()),
+        capabilities: Vec::new(),
+        website_url: None,
+        privacy_policy_url: None,
+        terms_of_service_url: None,
+        default_prompt: None,
+        brand_color: None,
+        composer_icon: Some(composer_icon),
+        composer_icon_url: Some("https://example.com/linear/icon.png".to_string()),
+        logo: None,
+        logo_dark: Some(logo_dark),
+        logo_url: Some("https://example.com/linear/logo.png".to_string()),
+        logo_url_dark: Some("https://example.com/linear/logo-dark.png".to_string()),
+        screenshots: Vec::new(),
+        screenshot_urls: vec!["https://example.com/linear/screenshot.png".to_string()],
+    };
+
+    assert_eq!(
+        serde_json::to_value(interface).unwrap(),
+        json!({
+            "displayName": "Linear",
+            "shortDescription": null,
+            "longDescription": null,
+            "developerName": null,
+            "category": "Productivity",
+            "capabilities": [],
+            "websiteUrl": null,
+            "privacyPolicyUrl": null,
+            "termsOfServiceUrl": null,
+            "defaultPrompt": null,
+            "brandColor": null,
+            "composerIcon": composer_icon_json,
+            "composerIconUrl": "https://example.com/linear/icon.png",
+            "logo": null,
+            "logoDark": logo_dark_json,
+            "logoUrl": "https://example.com/linear/logo.png",
+            "logoUrlDark": "https://example.com/linear/logo-dark.png",
+            "screenshots": [],
+            "screenshotUrls": ["https://example.com/linear/screenshot.png"],
+        }),
+    );
+}
+
+#[test]
+fn plugin_list_params_ignore_removed_force_remote_sync_field() {
+    assert_eq!(
+        serde_json::from_value::<PluginListParams>(json!({
+            "cwds": null,
+            "forceRemoteSync": true,
+        }))
+        .unwrap(),
+        PluginListParams {
+            cwds: None,
+            marketplace_kinds: None,
+        },
+    );
+}
+
+#[test]
+fn plugin_list_params_serializes_marketplace_kind_filter() {
+    assert_eq!(
+        serde_json::to_value(PluginListParams {
+            cwds: None,
+            marketplace_kinds: Some(vec![
+                PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::Vertical,
+                PluginListMarketplaceKind::WorkspaceDirectory,
+                PluginListMarketplaceKind::SharedWithMe,
+                PluginListMarketplaceKind::CreatedByMeRemote,
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "marketplaceKinds": [
+                "local",
+                "vertical",
+                "workspace-directory",
+                "shared-with-me",
+                "created-by-me-remote",
+            ],
+        }),
+    );
+}
+
+#[test]
+fn plugin_installed_params_serializes_install_suggestion_names() {
+    assert_eq!(
+        serde_json::to_value(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: Some(vec![
+                "computer-use".to_string(),
+                "chrome".to_string(),
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "cwds": null,
+            "installSuggestionPluginNames": [
+                "computer-use",
+                "chrome",
+            ],
+        }),
+    );
+}
+
+#[test]
+fn plugin_read_params_serialization_uses_install_source_fields() {
+    let marketplace_path = if cfg!(windows) {
+        r"C:\plugins\marketplace.json"
+    } else {
+        "/plugins/marketplace.json"
+    };
+    let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+    let marketplace_path_json = marketplace_path.as_path().display().to_string();
+    assert_eq!(
+        serde_json::to_value(PluginReadParams {
+            marketplace_path: Some(marketplace_path.clone()),
+            remote_marketplace_name: None,
+            plugin_name: "gmail".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "marketplacePath": marketplace_path_json,
+            "remoteMarketplaceName": null,
+            "pluginName": "gmail",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginReadParams>(json!({
+            "marketplacePath": marketplace_path_json,
+            "pluginName": "gmail",
+            "forceRemoteSync": true,
+        }))
+        .unwrap(),
+        PluginReadParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "gmail".to_string(),
+        },
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginReadParams>(json!({
+            "remoteMarketplaceName": "openai-curated-remote",
+            "pluginName": "gmail",
+        }))
+        .unwrap(),
+        PluginReadParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
+            plugin_name: "gmail".to_string(),
+        },
+    );
+}
+
+#[test]
+fn plugin_install_params_serialization_omits_force_remote_sync() {
+    let marketplace_path = if cfg!(windows) {
+        r"C:\plugins\marketplace.json"
+    } else {
+        "/plugins/marketplace.json"
+    };
+    let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+    let marketplace_path_json = marketplace_path.as_path().display().to_string();
+    assert_eq!(
+        serde_json::to_value(PluginInstallParams {
+            marketplace_path: Some(marketplace_path.clone()),
+            remote_marketplace_name: None,
+            plugin_name: "gmail".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "marketplacePath": marketplace_path_json,
+            "remoteMarketplaceName": null,
+            "pluginName": "gmail",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginInstallParams>(json!({
+            "marketplacePath": marketplace_path_json,
+            "pluginName": "gmail",
+            "forceRemoteSync": true,
+        }))
+        .unwrap(),
+        PluginInstallParams {
+            marketplace_path: Some(marketplace_path),
+            remote_marketplace_name: None,
+            plugin_name: "gmail".to_string(),
+        },
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginInstallParams>(json!({
+            "remoteMarketplaceName": "openai-curated-remote",
+            "pluginName": "gmail",
+            "forceRemoteSync": true,
+        }))
+        .unwrap(),
+        PluginInstallParams {
+            marketplace_path: None,
+            remote_marketplace_name: Some("openai-curated-remote".to_string()),
+            plugin_name: "gmail".to_string(),
+        },
+    );
+}
+
+#[test]
+fn plugin_skill_read_params_serialization_uses_remote_plugin_id() {
+    assert_eq!(
+        serde_json::to_value(PluginSkillReadParams {
+            remote_marketplace_name: "openai-curated-remote".to_string(),
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            skill_name: "plan-work".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "remoteMarketplaceName": "openai-curated-remote",
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "skillName": "plan-work",
+        }),
+    );
+}
+
+#[test]
+fn plugin_share_params_and_response_serialization_use_camel_case_fields() {
+    let plugin_path = if cfg!(windows) {
+        r"C:\plugins\gmail"
+    } else {
+        "/plugins/gmail"
+    };
+    let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+    let plugin_path_json = plugin_path.as_path().display().to_string();
+
+    assert_eq!(
+        serde_json::to_value(PluginShareSaveParams {
+            plugin_path: plugin_path.clone(),
+            remote_plugin_id: None,
+            discoverability: None,
+            share_targets: None,
+        })
+        .unwrap(),
+        json!({
+            "pluginPath": plugin_path_json,
+            "remotePluginId": null,
+            "discoverability": null,
+            "shareTargets": null,
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareSaveParams {
+            plugin_path,
+            remote_plugin_id: Some("plugins~Plugin_00000000000000000000000000000000".to_string(),),
+            discoverability: Some(PluginShareDiscoverability::Private),
+            share_targets: Some(vec![
+                PluginShareTarget {
+                    principal_type: PluginSharePrincipalType::User,
+                    principal_id: "user-1".to_string(),
+                    role: PluginShareTargetRole::Reader,
+                },
+                PluginShareTarget {
+                    principal_type: PluginSharePrincipalType::Group,
+                    principal_id: "group-1".to_string(),
+                    role: PluginShareTargetRole::Reader,
+                },
+            ]),
+        })
+        .unwrap(),
+        json!({
+            "pluginPath": plugin_path_json,
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "discoverability": "PRIVATE",
+            "shareTargets": [
+                {
+                    "principalType": "user",
+                    "principalId": "user-1",
+                    "role": "reader",
+                },
+                {
+                    "principalType": "group",
+                    "principalId": "group-1",
+                    "role": "reader",
+                },
+            ],
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareSaveResponse {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            share_url: String::new(),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "shareUrl": "",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareUpdateTargetsParams {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            discoverability: PluginShareUpdateDiscoverability::Unlisted,
+            share_targets: vec![PluginShareTarget {
+                principal_type: PluginSharePrincipalType::Group,
+                principal_id: "group-1".to_string(),
+                role: PluginShareTargetRole::Editor,
+            }],
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "discoverability": "UNLISTED",
+            "shareTargets": [{
+                "principalType": "group",
+                "principalId": "group-1",
+                "role": "editor",
+            }],
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareUpdateTargetsResponse {
+            principals: vec![PluginSharePrincipal {
+                principal_type: PluginSharePrincipalType::User,
+                principal_id: "user-1".to_string(),
+                role: PluginSharePrincipalRole::Owner,
+                name: "Gavin".to_string(),
+            }],
+            discoverability: PluginShareDiscoverability::Unlisted,
+        })
+        .unwrap(),
+        json!({
+            "principals": [{
+                "principalType": "user",
+                "principalId": "user-1",
+                "role": "owner",
+                "name": "Gavin",
+            }],
+            "discoverability": "UNLISTED",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginShareListParams>(json!({})).unwrap(),
+        PluginShareListParams {},
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareCheckoutParams {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+        }),
+    );
+
+    let plugin_path = if cfg!(windows) {
+        r"C:\Users\me\plugins\gmail"
+    } else {
+        "/Users/me/plugins/gmail"
+    };
+    let plugin_path = AbsolutePathBuf::try_from(PathBuf::from(plugin_path)).unwrap();
+    let plugin_path_json = plugin_path.as_path().display().to_string();
+    let marketplace_path = if cfg!(windows) {
+        r"C:\Users\me\.agents\plugins\marketplace.json"
+    } else {
+        "/Users/me/.agents/plugins/marketplace.json"
+    };
+    let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+    let marketplace_path_json = marketplace_path.as_path().display().to_string();
+    assert_eq!(
+        serde_json::to_value(PluginShareCheckoutResponse {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+            plugin_id: "gmail@forall-curated".to_string(),
+            plugin_name: "gmail".to_string(),
+            plugin_path,
+            marketplace_name: "forall-curated".to_string(),
+            marketplace_path,
+            remote_version: Some("1.2.3".to_string()),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+            "pluginId": "gmail@forall-curated",
+            "pluginName": "gmail",
+            "pluginPath": plugin_path_json,
+            "marketplaceName": "forall-curated",
+            "marketplacePath": marketplace_path_json,
+            "remoteVersion": "1.2.3",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginShareDeleteParams {
+            remote_plugin_id: "plugins~Plugin_00000000000000000000000000000000".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+        }),
+    );
+}
+
+#[test]
+fn plugin_share_list_response_serializes_share_items() {
+    assert_eq!(
+        serde_json::to_value(PluginShareListResponse {
+            data: vec![PluginShareListItem {
+                plugin: PluginSummary {
+                    id: "gmail@openai-curated-remote".to_string(),
+                    remote_plugin_id: Some(
+                        "plugins~Plugin_00000000000000000000000000000000".to_string(),
+                    ),
+                    local_version: None,
+                    name: "gmail".to_string(),
+                    share_context: None,
+                    source: PluginSource::Remote,
+                    installed: false,
+                    enabled: false,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnUse,
+                    availability: PluginAvailability::Available,
+                    interface: None,
+                    keywords: Vec::new(),
+                },
+                local_plugin_path: None,
+            }],
+        })
+        .unwrap(),
+        json!({
+            "data": [{
+                "plugin": {
+                    "id": "gmail@openai-curated-remote",
+                    "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
+                    "localVersion": null,
+                    "name": "gmail",
+                    "shareContext": null,
+                    "source": { "type": "remote" },
+                    "installed": false,
+                    "enabled": false,
+                    "installPolicy": "AVAILABLE",
+                    "authPolicy": "ON_USE",
+                    "availability": "AVAILABLE",
+                    "interface": null,
+                    "keywords": [],
+                },
+                "localPluginPath": null,
+            }],
+        }),
+    );
+}
+
+#[test]
+fn plugin_summary_defaults_missing_availability_to_available() {
+    let summary: PluginSummary = serde_json::from_value(json!({
+        "id": "plugins~Plugin_00000000000000000000000000000000",
+        "name": "gmail",
+        "source": { "type": "remote" },
+        "installed": false,
+        "enabled": false,
+        "installPolicy": "AVAILABLE",
+        "authPolicy": "ON_USE",
+        "interface": null,
+    }))
+    .unwrap();
+
+    assert_eq!(summary.availability, PluginAvailability::Available);
+    assert_eq!(summary.local_version, None);
+    assert_eq!(summary.share_context, None);
+}
+
+#[test]
+fn plugin_availability_deserializes_enabled_alias() {
+    let availability: PluginAvailability = serde_json::from_value(json!("ENABLED")).unwrap();
+
+    assert_eq!(availability, PluginAvailability::Available);
+    assert_eq!(
+        serde_json::to_value(availability).unwrap(),
+        json!("AVAILABLE")
+    );
+}
+
+#[test]
+fn plugin_uninstall_params_serialization_omits_force_remote_sync() {
+    assert_eq!(
+        serde_json::to_value(PluginUninstallParams {
+            plugin_id: "gmail@openai-curated".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "pluginId": "gmail@openai-curated",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginUninstallParams>(json!({
+            "pluginId": "gmail@openai-curated",
+            "forceRemoteSync": true,
+        }))
+        .unwrap(),
+        PluginUninstallParams {
+            plugin_id: "gmail@openai-curated".to_string(),
+        },
+    );
+
+    assert_eq!(
+        serde_json::to_value(PluginUninstallParams {
+            plugin_id: "plugins~Plugin_gmail".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "pluginId": "plugins~Plugin_gmail",
+        }),
+    );
+
+    assert_eq!(
+        serde_json::from_value::<PluginUninstallParams>(json!({
+            "pluginId": "plugins~Plugin_gmail",
+            "forceRemoteSync": true,
+        }))
+        .unwrap(),
+        PluginUninstallParams {
+            plugin_id: "plugins~Plugin_gmail".to_string(),
+        },
+    );
+}
+
+#[test]
+fn marketplace_remove_response_serializes_nullable_installed_root() {
+    let installed_root = if cfg!(windows) {
+        r"C:\marketplaces\debug"
+    } else {
+        "/tmp/marketplaces/debug"
+    };
+    let installed_root = AbsolutePathBuf::try_from(PathBuf::from(installed_root)).unwrap();
+    let installed_root_json = installed_root.as_path().display().to_string();
+    assert_eq!(
+        serde_json::to_value(MarketplaceRemoveResponse {
+            marketplace_name: "debug".to_string(),
+            installed_root: Some(installed_root),
+        })
+        .unwrap(),
+        json!({
+            "marketplaceName": "debug",
+            "installedRoot": installed_root_json,
+        }),
+    );
+
+    assert_eq!(
+        serde_json::to_value(MarketplaceRemoveResponse {
+            marketplace_name: "debug".to_string(),
+            installed_root: None,
+        })
+        .unwrap(),
+        json!({
+            "marketplaceName": "debug",
+            "installedRoot": null,
+        }),
+    );
+}
+
+#[test]
+fn marketplace_upgrade_response_serializes_camel_case_fields() {
+    let upgraded_root = if cfg!(windows) {
+        r"C:\marketplaces\debug"
+    } else {
+        "/tmp/marketplaces/debug"
+    };
+    let upgraded_root = AbsolutePathBuf::try_from(PathBuf::from(upgraded_root)).unwrap();
+    let upgraded_root_json = upgraded_root.as_path().display().to_string();
+
+    assert_eq!(
+        serde_json::to_value(MarketplaceUpgradeResponse {
+            selected_marketplaces: vec!["debug".to_string()],
+            upgraded_roots: vec![upgraded_root],
+            errors: vec![MarketplaceUpgradeErrorInfo {
+                marketplace_name: "broken".to_string(),
+                message: "failed to clone".to_string(),
+            }],
+        })
+        .unwrap(),
+        json!({
+            "selectedMarketplaces": ["debug"],
+            "upgradedRoots": [upgraded_root_json],
+            "errors": [{
+                "marketplaceName": "broken",
+                "message": "failed to clone",
+            }],
+        }),
+    );
+}
+
+#[test]
+fn forall_error_info_serializes_http_status_code_in_camel_case() {
+    let value = ForallErrorInfo::ResponseTooManyFailedAttempts {
+        http_status_code: Some(401),
+    };
+
+    assert_eq!(
+        serde_json::to_value(value).unwrap(),
+        json!({
+            "responseTooManyFailedAttempts": {
+                "httpStatusCode": 401
+            }
+        })
+    );
+}
+
+#[test]
+fn forall_error_info_serializes_cyber_policy_in_camel_case() {
+    assert_eq!(
+        serde_json::to_value(ForallErrorInfo::CyberPolicy).unwrap(),
+        json!("cyberPolicy")
+    );
+}
+
+#[test]
+fn forall_error_info_serializes_active_turn_not_steerable_turn_kind_in_camel_case() {
+    let value = ForallErrorInfo::ActiveTurnNotSteerable {
+        turn_kind: NonSteerableTurnKind::Review,
+    };
+
+    assert_eq!(
+        serde_json::to_value(value).unwrap(),
+        json!({
+            "activeTurnNotSteerable": {
+                "turnKind": "review"
+            }
+        })
+    );
+}
+
+#[test]
+fn dynamic_tool_response_serializes_content_items() {
+    let value = serde_json::to_value(DynamicToolCallResponse {
+        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+            text: "dynamic-ok".to_string(),
+        }],
+        success: true,
+    })
+    .unwrap();
+
+    assert_eq!(
+        value,
+        json!({
+            "contentItems": [
+                {
+                    "type": "inputText",
+                    "text": "dynamic-ok"
+                }
+            ],
+            "success": true,
+        })
+    );
+}
+
+#[test]
+fn dynamic_tool_response_serializes_text_and_image_content_items() {
+    let value = serde_json::to_value(DynamicToolCallResponse {
+        content_items: vec![
+            DynamicToolCallOutputContentItem::InputText {
+                text: "dynamic-ok".to_string(),
+            },
+            DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+        ],
+        success: true,
+    })
+    .unwrap();
+
+    assert_eq!(
+        value,
+        json!({
+            "contentItems": [
+                {
+                    "type": "inputText",
+                    "text": "dynamic-ok"
+                },
+                {
+                    "type": "inputImage",
+                    "imageUrl": "data:image/png;base64,AAA"
+                }
+            ],
+            "success": true,
+        })
+    );
+}
+
+#[test]
+fn thread_start_params_preserve_explicit_null_service_tier() {
+    let params: ThreadStartParams =
+        serde_json::from_value(json!({ "serviceTier": null })).expect("params should deserialize");
+    assert_eq!(params.service_tier, Some(None));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+
+    let serialized_without_override =
+        serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
+    assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_lifecycle_responses_default_missing_optional_fields() {
+    let response = json!({
+        "thread": {
+            "id": "thread-id",
+            "sessionId": "thread-id",
+            "forkedFromId": null,
+            "preview": "",
+            "ephemeral": false,
+            "modelProvider": "openai",
+            "createdAt": 1,
+            "updatedAt": 1,
+            "status": { "type": "idle" },
+            "path": null,
+            "cwd": absolute_path_string("tmp"),
+            "cliVersion": "0.0.0",
+            "source": "exec",
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "turns": []
+        },
+        "model": "gpt-5",
+        "modelProvider": "openai",
+        "serviceTier": null,
+        "cwd": absolute_path_string("tmp"),
+        "approvalPolicy": "on-failure",
+        "approvalsReviewer": "user",
+        "sandbox": { "type": "dangerFullAccess" },
+        "reasoningEffort": null
+    });
+
+    let start: ThreadStartResponse =
+        serde_json::from_value(response.clone()).expect("thread/start response");
+    let resume: ThreadResumeResponse =
+        serde_json::from_value(response.clone()).expect("thread/resume response");
+    let fork: ThreadForkResponse =
+        serde_json::from_value(response.clone()).expect("thread/fork response");
+
+    assert_eq!(start.instruction_sources, Vec::<LegacyAppPathString>::new());
+    assert_eq!(start.thread.parent_thread_id, None);
+    assert_eq!(start.thread.recency_at, None);
+    assert_eq!(
+        resume.instruction_sources,
+        Vec::<LegacyAppPathString>::new()
+    );
+    assert_eq!(fork.instruction_sources, Vec::<LegacyAppPathString>::new());
+    assert_eq!(start.active_permission_profile, None);
+    assert_eq!(resume.active_permission_profile, None);
+    assert_eq!(resume.initial_turns_page, None);
+    assert_eq!(fork.active_permission_profile, None);
+    assert_eq!(
+        (
+            start.multi_agent_mode,
+            resume.multi_agent_mode,
+            fork.multi_agent_mode,
+        ),
+        (
+            MultiAgentMode::ExplicitRequestOnly,
+            MultiAgentMode::ExplicitRequestOnly,
+            MultiAgentMode::ExplicitRequestOnly,
+        )
+    );
+
+    let foreign_source: LegacyAppPathString =
+        serde_json::from_value(json!(r"C:\workspace\AGENTS.md")).expect("foreign source");
+    let mut response_with_foreign_source = response;
+    response_with_foreign_source["instructionSources"] = json!([foreign_source.as_str()]);
+    let start: ThreadStartResponse = serde_json::from_value(response_with_foreign_source.clone())
+        .expect("thread/start response with foreign source");
+    let resume: ThreadResumeResponse = serde_json::from_value(response_with_foreign_source.clone())
+        .expect("thread/resume response with foreign source");
+    let fork: ThreadForkResponse = serde_json::from_value(response_with_foreign_source)
+        .expect("thread/fork response with foreign source");
+    assert_eq!(start.instruction_sources, vec![foreign_source.clone()]);
+    assert_eq!(resume.instruction_sources, vec![foreign_source.clone()]);
+    assert_eq!(fork.instruction_sources, vec![foreign_source]);
+    let foreign_source_uri =
+        PathUri::parse("file:///C:/workspace/AGENTS.md").expect("foreign source URI");
+    assert_eq!(
+        start.instruction_source_path_uris(),
+        vec![foreign_source_uri.clone()]
+    );
+    assert_eq!(
+        resume.instruction_source_path_uris(),
+        vec![foreign_source_uri.clone()]
+    );
+    assert_eq!(
+        fork.instruction_source_path_uris(),
+        vec![foreign_source_uri]
+    );
+}
+
+#[test]
+fn thread_recency_sort_key_serializes_as_snake_case() {
+    assert_eq!(
+        serde_json::to_value(ThreadSortKey::RecencyAt).expect("sort key should serialize"),
+        json!("recency_at")
+    );
+}
+
+#[test]
+fn turn_start_params_preserve_explicit_null_service_tier() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "serviceTier": null
+    }))
+    .expect("params should deserialize");
+    assert_eq!(params.service_tier, Some(None));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+
+    let without_override = TurnStartParams {
+        thread_id: "thread_123".to_string(),
+        client_user_message_id: None,
+        input: vec![],
+        responsesapi_client_metadata: None,
+        additional_context: None,
+        environments: None,
+        cwd: None,
+        runtime_workspace_roots: None,
+        approval_policy: None,
+        approvals_reviewer: None,
+        sandbox_policy: None,
+        permissions: None,
+        model: None,
+        service_tier: None,
+        effort: None,
+        summary: None,
+        output_schema: None,
+        collaboration_mode: None,
+        multi_agent_mode: None,
+        personality: None,
+    };
+    let serialized_without_override =
+        serde_json::to_value(&without_override).expect("params should serialize");
+    assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn turn_start_params_round_trip_multi_agent_mode() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "multiAgentMode": "proactive"
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.multi_agent_mode,
+        Some(forall_protocol::config_types::MultiAgentMode::Proactive)
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("turn/start.multiAgentMode")
+    );
+    assert_eq!(
+        serde_json::to_value(params).expect("params should serialize")["multiAgentMode"],
+        "proactive"
+    );
+}
+
+#[test]
+fn thread_start_params_round_trip_multi_agent_mode() {
+    let params: ThreadStartParams = serde_json::from_value(json!({
+        "multiAgentMode": "proactive"
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.multi_agent_mode,
+        Some(forall_protocol::config_types::MultiAgentMode::Proactive)
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("thread/start.multiAgentMode")
+    );
+    assert_eq!(
+        serde_json::to_value(params).expect("params should serialize")["multiAgentMode"],
+        "proactive"
+    );
+}
+
+#[test]
+fn thread_settings_update_params_preserve_explicit_null_service_tier() {
+    let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "serviceTier": null
+    }))
+    .expect("params should deserialize");
+    assert_eq!(params.service_tier, Some(None));
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("serviceTier"),
+        Some(&serde_json::Value::Null)
+    );
+
+    let without_override = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        service_tier: None,
+        ..Default::default()
+    };
+    let serialized_without_override =
+        serde_json::to_value(&without_override).expect("params should serialize");
+    assert_eq!(serialized_without_override.get("serviceTier"), None);
+}
+
+#[test]
+fn thread_settings_update_params_preserve_field_level_experimental_gates() {
+    let permissions = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        permissions: Some(":workspace".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&permissions),
+        Some("thread/settings/update.permissions")
+    );
+
+    let granular_approval = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        approval_policy: Some(AskForApproval::Granular {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&granular_approval),
+        Some("askForApproval.granular")
+    );
+
+    let collaboration_mode = ThreadSettingsUpdateParams {
+        thread_id: "thread_123".to_string(),
+        collaboration_mode: Some(forall_protocol::config_types::CollaborationMode {
+            mode: forall_protocol::config_types::ModeKind::Plan,
+            settings: forall_protocol::config_types::Settings {
+                model: "mock-model".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&collaboration_mode),
+        Some("thread/settings/update.collaborationMode")
+    );
+}
+
+#[test]
+fn turn_start_params_round_trip_environments() {
+    // Use a path foreign to the test host so this exercises syntax preservation instead of the
+    // host-native conversion performed by test_absolute_path().
+    #[cfg(windows)]
+    let raw_cwd = "/workspace";
+    #[cfg(not(windows))]
+    let raw_cwd = r"C:\workspace";
+    let cwd: LegacyAppPathString =
+        serde_json::from_value(json!(raw_cwd)).expect("API path should deserialize");
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "environments": [
+            {
+                "environmentId": "local",
+                "cwd": cwd
+            }
+        ],
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params.environments,
+        Some(vec![TurnEnvironmentParams {
+            environment_id: "local".to_string(),
+            cwd: cwd.clone(),
+        }])
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("turn/start.environments")
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(
+        serialized.get("environments"),
+        Some(&json!([
+            {
+                "environmentId": "local",
+                "cwd": cwd
+            }
+        ]))
+    );
+}
+
+#[test]
+fn turn_start_params_preserve_empty_environments() {
+    let params: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "environments": [],
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(params.environments, Some(Vec::new()));
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+        Some("turn/start.environments")
+    );
+
+    let serialized = serde_json::to_value(&params).expect("params should serialize");
+    assert_eq!(serialized.get("environments"), Some(&json!([])));
+}
+
+#[test]
+fn turn_start_params_treat_null_or_omitted_environments_as_default() {
+    let null_environments: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+        "environments": null,
+    }))
+    .expect("params should deserialize");
+    let omitted_environments: TurnStartParams = serde_json::from_value(json!({
+        "threadId": "thread_123",
+        "input": [],
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(null_environments.environments, None);
+    assert_eq!(omitted_environments.environments, None);
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&null_environments),
+        None
+    );
+    assert_eq!(
+        crate::experimental_api::ExperimentalApi::experimental_reason(&omitted_environments),
+        None
+    );
+}
+
+#[test]
+fn realtime_append_text_defaults_role_to_user() {
+    let params = serde_json::from_value::<ThreadRealtimeAppendTextParams>(json!({
+        "threadId": "thread_123",
+        "text": "hello",
+    }))
+    .expect("params should deserialize");
+
+    assert_eq!(
+        params,
+        ThreadRealtimeAppendTextParams {
+            thread_id: "thread_123".to_string(),
+            text: "hello".to_string(),
+            role: ConversationTextRole::User,
+        }
+    );
+}
+
+#[test]
+fn login_account_params_oauth_round_trips() {
+    // A pre-provider client payload must keep round-tripping unchanged.
+    let value = json!({ "type": "oauth" });
+    let params = serde_json::from_value::<LoginAccountParams>(value.clone())
+        .expect("params should deserialize");
+    assert_eq!(params, LoginAccountParams::Oauth { provider: None });
+    assert_eq!(
+        serde_json::to_value(&params).expect("params should serialize"),
+        value
+    );
+}
+
+#[test]
+fn login_account_params_oauth_github_round_trips() {
+    let value = json!({ "type": "oauth", "provider": "github" });
+    let params = serde_json::from_value::<LoginAccountParams>(value.clone())
+        .expect("params should deserialize");
+    assert_eq!(
+        params,
+        LoginAccountParams::Oauth {
+            provider: Some(OauthSignInProvider::Github)
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&params).expect("params should serialize"),
+        value
+    );
+}
+
+#[test]
+fn login_account_response_oauth_round_trips() {
+    let value = json!({
+        "type": "oauth",
+        "loginId": "login_123",
+        "authUrl": "https://auth.forall.astrio.app/oauth/authorize?state=abc",
+    });
+    let response = serde_json::from_value::<LoginAccountResponse>(value.clone())
+        .expect("response should deserialize");
+    assert_eq!(
+        response,
+        LoginAccountResponse::Oauth {
+            login_id: "login_123".to_string(),
+            auth_url: "https://auth.forall.astrio.app/oauth/authorize?state=abc".to_string(),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&response).expect("response should serialize"),
+        value
+    );
+}
+
+#[test]
+fn account_oauth_round_trips() {
+    let value = json!({
+        "type": "oauth",
+        "email": "user@example.com",
+        "name": "Test User",
+        "planType": "pro",
+    });
+    let account =
+        serde_json::from_value::<Account>(value.clone()).expect("account should deserialize");
+    assert_eq!(
+        account,
+        Account::Oauth {
+            email: Some("user@example.com".to_string()),
+            name: Some("Test User".to_string()),
+            plan_type: Some(forall_protocol::account::PlanType::Pro),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&account).expect("account should serialize"),
+        value
+    );
+
+    // Optional fields may be omitted entirely on the wire.
+    let minimal = serde_json::from_value::<Account>(json!({ "type": "oauth" }))
+        .expect("minimal account should deserialize");
+    assert_eq!(
+        minimal,
+        Account::Oauth {
+            email: None,
+            name: None,
+            plan_type: None,
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&minimal).expect("minimal account should serialize"),
+        json!({ "type": "oauth", "email": null, "name": null, "planType": null })
+    );
+}
+
+#[test]
+fn oauth_provider_account_maps_to_oauth_account() {
+    let account: Account = forall_protocol::account::ProviderAccount::Chatgpt {
+        email: Some("user@example.com".to_string()),
+        name: Some("Test User".to_string()),
+        plan_type: forall_protocol::account::PlanType::Plus,
+    }
+    .into();
+    assert_eq!(
+        account,
+        Account::Oauth {
+            email: Some("user@example.com".to_string()),
+            name: Some("Test User".to_string()),
+            plan_type: Some(forall_protocol::account::PlanType::Plus),
+        }
+    );
+}

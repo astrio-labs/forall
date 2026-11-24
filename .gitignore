@@ -2,3 +2,7 @@
 
 # Session-local editor/agent scratch config
 .claude/launch.json
+
+/agent/target/
+node_modules/
+.DS_Store

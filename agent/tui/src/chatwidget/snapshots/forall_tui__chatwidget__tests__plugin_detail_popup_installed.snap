@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 704
+expression: strip_osc8_for_snapshot(&popup)
+---
+  Plugins
+  Figma · Installed · Forall Marketplace
+  Turn Figma files into implementation context.
+
+› 1. Back to plugins   Return to the plugin list.
+  2. Uninstall plugin  Remove this plugin now.
+     Source            Local
+     Auth              Auth on install
+     Skills            design-review, extract-copy
+     Hooks             PreToolUse (1), Stop (2)
+     MCP Servers       figma-mcp, docs-mcp
+
+  Press esc to close.

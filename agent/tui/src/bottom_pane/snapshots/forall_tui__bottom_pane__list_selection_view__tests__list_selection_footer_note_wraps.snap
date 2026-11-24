@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 1663
+expression: "render_lines_with_width(&view, 40)"
+---
+                                        
+  Select Approval Mode                  
+                                        
+› 1. Read Only (current)  Forall can    
+                          read files    
+                                        
+  Note: Use /setup-default-sandbox to   
+  allow network access.                 
+  Press enter to confirm or esc to go ba

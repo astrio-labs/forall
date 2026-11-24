@@ -1,0 +1,252 @@
+use crate::exec_command::relativize_to_home;
+use crate::legacy_core::config::Config;
+use crate::status::StatusAccountDisplay;
+use crate::text_formatting;
+use forall_utils_path_uri::PathConvention;
+use forall_utils_path_uri::PathUri;
+use std::path::Path;
+use unicode_width::UnicodeWidthStr;
+
+fn normalize_agents_display_path(path: &Path) -> String {
+    dunce::simplified(path).display().to_string()
+}
+
+pub(crate) fn compose_model_display(
+    model_name: &str,
+    entries: &[(&str, String)],
+) -> (String, Vec<String>) {
+    let mut details: Vec<String> = Vec::new();
+    if let Some((_, effort)) = entries.iter().find(|(k, _)| *k == "reasoning effort") {
+        details.push(format!("reasoning {}", effort.to_ascii_lowercase()));
+    }
+    if let Some((_, summary)) = entries.iter().find(|(k, _)| *k == "reasoning summaries") {
+        let summary = summary.trim();
+        if summary.eq_ignore_ascii_case("none") || summary.eq_ignore_ascii_case("off") {
+            details.push("summaries off".to_string());
+        } else if !summary.is_empty() {
+            details.push(format!("summaries {}", summary.to_ascii_lowercase()));
+        }
+    }
+
+    (model_name.to_string(), details)
+}
+
+pub(crate) fn compose_agents_summary(config: &Config, paths: &[PathUri]) -> String {
+    let mut rels: Vec<String> = Vec::new();
+
+    for path in paths {
+        // TODO(anp): Rationalize instruction-source summaries with the TUI's broader foreign-path
+        // display strategy once other status surfaces can retain environment-native paths.
+        if path.infer_path_convention() != Some(PathConvention::native()) {
+            rels.push(path.inferred_native_path_string());
+            continue;
+        }
+        let Ok(p) = path.to_abs_path() else {
+            rels.push(path.inferred_native_path_string());
+            continue;
+        };
+        let p = p.as_path();
+        let file_name = p
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let display = if let Some(parent) = p.parent() {
+            if parent == config.cwd.as_path() {
+                file_name.clone()
+            } else {
+                let mut cur = config.cwd.as_path();
+                let mut ups = 0usize;
+                let mut reached = false;
+                while let Some(c) = cur.parent() {
+                    if cur == parent {
+                        reached = true;
+                        break;
+                    }
+                    cur = c;
+                    ups += 1;
+                }
+                if reached {
+                    let up = format!("..{}", std::path::MAIN_SEPARATOR);
+                    format!("{}{}", up.repeat(ups), file_name)
+                } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
+                    normalize_agents_display_path(stripped)
+                } else {
+                    normalize_agents_display_path(p)
+                }
+            }
+        } else {
+            normalize_agents_display_path(p)
+        };
+        rels.push(display);
+    }
+
+    if rels.is_empty() {
+        "<none>".to_string()
+    } else {
+        rels.join(", ")
+    }
+}
+
+pub(crate) fn compose_account_display(
+    account_display: Option<&StatusAccountDisplay>,
+) -> Option<StatusAccountDisplay> {
+    account_display.cloned()
+}
+
+pub(crate) fn format_tokens_compact(value: i64) -> String {
+    let value = value.max(0);
+    if value == 0 {
+        return "0".to_string();
+    }
+    if value < 1_000 {
+        return value.to_string();
+    }
+
+    let value_f64 = value as f64;
+    let (scaled, suffix) = if value >= 1_000_000_000_000 {
+        (value_f64 / 1_000_000_000_000.0, "T")
+    } else if value >= 1_000_000_000 {
+        (value_f64 / 1_000_000_000.0, "B")
+    } else if value >= 1_000_000 {
+        (value_f64 / 1_000_000.0, "M")
+    } else {
+        (value_f64 / 1_000.0, "K")
+    };
+
+    let decimals = if scaled < 10.0 {
+        2
+    } else if scaled < 100.0 {
+        1
+    } else {
+        0
+    };
+
+    let mut formatted = format!("{scaled:.decimals$}");
+    if formatted.contains('.') {
+        while formatted.ends_with('0') {
+            formatted.pop();
+        }
+        if formatted.ends_with('.') {
+            formatted.pop();
+        }
+    }
+
+    format!("{formatted}{suffix}")
+}
+
+pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize>) -> String {
+    let formatted = if let Some(rel) = relativize_to_home(directory) {
+        if rel.as_os_str().is_empty() {
+            "~".to_string()
+        } else {
+            format!("~{}{}", std::path::MAIN_SEPARATOR, rel.display())
+        }
+    } else {
+        directory.display().to_string()
+    };
+
+    if let Some(max_width) = max_width {
+        if max_width == 0 {
+            return String::new();
+        }
+        if UnicodeWidthStr::width(formatted.as_str()) > max_width {
+            return text_formatting::center_truncate_path(&formatted, max_width);
+        }
+    }
+
+    formatted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
+    use forall_utils_absolute_path::test_support::PathBufExt;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    async fn test_config(forall_home: &TempDir, cwd: &TempDir) -> Config {
+        ConfigBuilder::default()
+            .forall_home(forall_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("load config")
+    }
+
+    #[tokio::test]
+    async fn compose_agents_summary_includes_global_agents_path() {
+        let forall_home = TempDir::new().expect("temp forall home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let global_agents_path = forall_home.path().join("global.md");
+        let config = test_config(&forall_home, &cwd).await;
+
+        assert_eq!(
+            compose_agents_summary(
+                &config,
+                &[PathUri::from_abs_path(&global_agents_path.abs())]
+            ),
+            format_directory_display(&global_agents_path, /*max_width*/ None)
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_agents_summary_names_global_agents_override() {
+        let forall_home = TempDir::new().expect("temp forall home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let override_path = forall_home.path().join("override.md");
+        let config = test_config(&forall_home, &cwd).await;
+
+        assert_eq!(
+            compose_agents_summary(&config, &[PathUri::from_abs_path(&override_path.abs())]),
+            format_directory_display(&override_path, /*max_width*/ None)
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_agents_summary_shows_relative_native_and_full_foreign_paths() {
+        let forall_home = TempDir::new().expect("temp forall home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let config = test_config(&forall_home, &cwd).await;
+        let native_source = PathUri::from_abs_path(&config.cwd.join("AGENTS.md"));
+        let foreign_source = if cfg!(windows) {
+            PathUri::parse("file:///remote%20workspace/AGENTS.md")
+                .expect("POSIX instruction source")
+        } else {
+            PathUri::parse("file:///C:/remote%20workspace/AGENTS.md")
+                .expect("Windows instruction source")
+        };
+
+        let summary = compose_agents_summary(&config, &[native_source, foreign_source]);
+        if cfg!(windows) {
+            insta::assert_snapshot!(summary, @r"AGENTS.md, /remote workspace/AGENTS.md");
+        } else {
+            insta::assert_snapshot!(summary, @r"AGENTS.md, C:\remote workspace\AGENTS.md");
+        }
+    }
+
+    #[tokio::test]
+    async fn compose_agents_summary_orders_global_before_project_agents() {
+        let forall_home = TempDir::new().expect("temp forall home");
+        let cwd = TempDir::new().expect("temp cwd");
+        let global_agents_path = forall_home.path().join("global.md");
+        let project_agents_path = cwd.path().join("project.md");
+        let config = test_config(&forall_home, &cwd).await;
+
+        let summary = compose_agents_summary(
+            &config,
+            &[
+                PathUri::from_abs_path(&global_agents_path.clone().abs()),
+                PathUri::from_abs_path(&project_agents_path.clone().abs()),
+            ],
+        );
+        let mut paths = summary.split(", ");
+        assert_eq!(
+            paths.next(),
+            Some(format_directory_display(&global_agents_path, /*max_width*/ None).as_str())
+        );
+        let project_path = paths.next().expect("project agents path");
+        assert!(project_path.ends_with("project.md"));
+        assert_eq!(paths.next(), None);
+    }
+}

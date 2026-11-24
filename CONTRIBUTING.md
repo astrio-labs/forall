@@ -4,14 +4,13 @@ Thank you for your interest in contributing to Forall's public repository.
 
 ## What belongs here
 
-This repo is for **distribution and community** assets:
+The `agent/` Rust workspace builds the Forall CLI and terminal UI.
+The root workspace maintains the libraries under `crates/`. Contributions
+also cover documentation, skills, examples, and the MCP bridge.
 
-- `install.sh` and installer improvements
-- Documentation (`docs/`)
-- Skills, plugins, and examples (`skills/`, `examples/`)
-- Issue templates and community workflows (`.github/`)
-
-The Forall agent and CLI **source code** is not developed in this repository.
+To build the CLI, follow [Getting started](docs/getting-started.md). Run
+`cargo test --workspace` at the repository root for the public libraries.
+Run `cargo test --locked -p forall-workflow` from `agent/` for the workflow engine.
 
 ## How to contribute
 

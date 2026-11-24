@@ -1,0 +1,263 @@
+use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
+use crate::tools::handlers::ToolSearchHandlerCache;
+use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::registry::ToolRegistry;
+use crate::tools::spec_plan::build_tool_router;
+use forall_mcp::ToolInfo;
+use forall_protocol::dynamic_tools::DynamicToolSpec;
+use forall_protocol::models::ResponseItem;
+use forall_protocol::models::SearchToolCallParams;
+use forall_tools::DiscoverableTool;
+use forall_tools::ToolCall as ExtensionToolCall;
+use forall_tools::ToolExecutor;
+use forall_tools::ToolName;
+use forall_tools::ToolSpec;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use tokio_util::sync::CancellationToken;
+use tracing::instrument;
+
+pub use crate::tools::context::ToolCallSource;
+
+#[derive(Clone, Debug)]
+pub struct ToolCall {
+    pub tool_name: ToolName,
+    pub call_id: String,
+    pub payload: ToolPayload,
+}
+
+pub struct ToolRouter {
+    registry: ToolRegistry,
+    model_visible_specs: Vec<ToolSpec>,
+}
+
+pub(crate) struct ToolRouterParams<'a> {
+    pub(crate) mcp_tools: Option<Vec<ToolInfo>>,
+    pub(crate) deferred_mcp_tools: Option<Vec<ToolInfo>>,
+    pub(crate) tool_suggest_candidates: Option<ToolSuggestCandidates>,
+    pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
+    pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolSuggestPresentation {
+    ListTool,
+    RecommendationContext,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ToolSuggestCandidates {
+    pub(crate) tools: Vec<DiscoverableTool>,
+    pub(crate) presentation: ToolSuggestPresentation,
+}
+
+impl ToolRouter {
+    pub(crate) fn from_turn_context(
+        turn_context: &TurnContext,
+        params: ToolRouterParams<'_>,
+        tool_search_handler_cache: &ToolSearchHandlerCache,
+    ) -> Self {
+        build_tool_router(turn_context, params, tool_search_handler_cache)
+    }
+
+    pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
+        Self {
+            registry,
+            model_visible_specs,
+        }
+    }
+
+    pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
+        self.model_visible_specs.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_tool_names_for_test(&self) -> Vec<ToolName> {
+        self.registry.tool_names_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_exposure_for_test(
+        &self,
+        name: &ToolName,
+    ) -> Option<crate::tools::registry::ToolExposure> {
+        self.registry.tool_exposure(name)
+    }
+
+    pub(crate) fn create_diff_consumer(
+        &self,
+        tool_name: &ToolName,
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.registry.create_diff_consumer(tool_name)
+    }
+
+    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
+        self.registry
+            .supports_parallel_tool_calls(&call.tool_name)
+            .unwrap_or(false)
+    }
+
+    pub fn tool_waits_for_runtime_cancellation(&self, call: &ToolCall) -> bool {
+        self.registry
+            .waits_for_runtime_cancellation(&call.tool_name)
+            .unwrap_or(false)
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub fn build_tool_call(item: ResponseItem) -> Result<Option<ToolCall>, FunctionCallError> {
+        match item {
+            ResponseItem::FunctionCall {
+                name,
+                namespace,
+                arguments,
+                call_id,
+                ..
+            } => {
+                let tool_name = ToolName::new(namespace, name);
+                Ok(Some(ToolCall {
+                    tool_name,
+                    call_id,
+                    payload: ToolPayload::Function { arguments },
+                }))
+            }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                execution,
+                arguments,
+                ..
+            } if execution == "client" => {
+                let arguments: SearchToolCallParams =
+                    serde_json::from_value(arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse tool_search arguments: {err}"
+                        ))
+                    })?;
+                Ok(Some(ToolCall {
+                    tool_name: ToolName::plain("tool_search"),
+                    call_id,
+                    payload: ToolPayload::ToolSearch { arguments },
+                }))
+            }
+            ResponseItem::ToolSearchCall { .. } => Ok(None),
+            ResponseItem::CustomToolCall {
+                name,
+                input,
+                call_id,
+                ..
+            } => Ok(Some(ToolCall {
+                tool_name: ToolName::plain(name),
+                call_id,
+                payload: ToolPayload::Custom { input },
+            })),
+            _ => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn dispatch_tool_call_with_code_mode_result(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            /*terminal_outcome_reached*/ None,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Arc<AtomicBool>,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        self.dispatch_tool_call_with_code_mode_result_inner(
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call,
+            source,
+            Some(terminal_outcome_reached),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_tool_call_with_code_mode_result_inner(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        cancellation_token: CancellationToken,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+        terminal_outcome_reached: Option<Arc<AtomicBool>>,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        let ToolCall {
+            tool_name,
+            call_id,
+            payload,
+        } = call;
+
+        let invocation = ToolInvocation {
+            session,
+            turn,
+            cancellation_token,
+            tracker,
+            call_id,
+            tool_name,
+            source,
+            payload,
+        };
+
+        self.registry
+            .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
+            .await
+    }
+}
+
+#[instrument(level = "trace", skip_all)]
+pub(crate) fn extension_tool_executors(
+    session: &Session,
+) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
+    session
+        .services
+        .extensions
+        .tool_contributors()
+        .iter()
+        .flat_map(|contributor| {
+            contributor.tools(
+                &session.services.session_extension_data,
+                &session.services.thread_extension_data,
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "router_tests.rs"]
+mod tests;

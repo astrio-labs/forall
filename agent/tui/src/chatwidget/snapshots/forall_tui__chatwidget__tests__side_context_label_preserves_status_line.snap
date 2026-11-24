@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/side.rs
+assertion_line: 401
+expression: terminal.backend()
+---
+"                                                                                "
+"                                                             gpt-5.6-sol default"
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│▌ Check recently modified functions for compatibility                         │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"gpt-5.6-sol                             Side from main thread · Ctrl+C to return"

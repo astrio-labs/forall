@@ -1,0 +1,18 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-context-fragments"
+version.workspace = true
+
+[lib]
+name = "forall_context_fragments"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-protocol = { workspace = true }
+forall-utils-string = { workspace = true }

@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PluginAuthPolicy": {
+      "enum": [
+        "ON_INSTALL",
+        "ON_USE"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "authPolicy": {
+      "$ref": "#/definitions/PluginAuthPolicy"
+    }
+  },
+  "required": [
+    "authPolicy"
+  ],
+  "title": "PluginInstallResponse",
+  "type": "object"
+}

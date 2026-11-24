@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3249
+expression: popup
+---
+  Upload logs?
+
+  The following files will be sent:
+    • forall-logs.log
+    • forall-doctor-report.json
+    • auto-review-rollout-thread-1.jsonl
+    • forall-connectivity-diagnostics.txt
+
+› 1. Yes  Share the current Forall session logs and diagnostics with the team
+          for troubleshooting.
+  2. No
+
+  Press enter to confirm or esc to go back

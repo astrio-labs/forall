@@ -34,7 +34,7 @@ This package does **not** edit your workspace. It only proxies verify tools to `
 
 | | CLI | This package |
 |--|-----|--------------|
-| Install | `curl …/install.sh \| bash` | `npx @astrio/forall-mcp` |
+| Install | [Build from source](../../docs/getting-started.md) | `npx @astrio/forall-mcp` |
 | Audience | Users adopting Forall as their agent | Users staying on Cursor / Claude / other hosts |
 | Auth | BYOK and/or Forall OAuth + dashboard key in TUI | Dashboard API key only |
 | Workspace writes | Yes (Forall agent) | No |

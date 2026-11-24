@@ -1,0 +1,72 @@
+[package]
+name = "forall-exec-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+arc-swap = { workspace = true }
+axum = { workspace = true, features = ["http1", "tokio", "ws"] }
+base64 = { workspace = true }
+bytes = { workspace = true }
+clatter = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-api = { workspace = true }
+forall-client = { workspace = true }
+forall-file-system = { workspace = true }
+forall-protocol = { workspace = true }
+forall-sandboxing = { workspace = true }
+forall-shell-command = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+forall-utils-pty = { workspace = true }
+forall-utils-rustls-provider = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+prost = "0.14.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true, features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-util = { workspace = true, features = ["io", "rt"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+forall-test-binary-support = { workspace = true }
+ctor = { workspace = true }
+http = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+test-case = "3.3.1"
+wiremock = { workspace = true }

@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 7820
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────╮"
+"│▌ /res                                                    │"
+"│                                                          │"
+"│                                                          │"
+"╰──────────────────────────────────────────────────────────╯"
+"  /resume  resume a saved chat                              "

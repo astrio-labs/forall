@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 2211
+expression: "format!(\"active hooks:\\n{}history:\\n{history}\", active_hook_blob(&chat))"
+---
+active hooks:
+• Running Stop hook: checking stop condition
+history:
+• Stop hook (stopped)
+  stop: continue with more context

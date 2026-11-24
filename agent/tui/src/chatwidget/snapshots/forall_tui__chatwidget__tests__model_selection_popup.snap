@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2122
+expression: popup
+---
+  Select Model and Effort
+  Access legacy models by running forall -m <model_name> or in your config.tom
+
+› 1. gpt-5.6-sol (default)  Flagship frontier model for the hardest coding,
+                            research, and real-world work.
+  2. gpt-5.6-terra          Balanced frontier model for everyday coding and
+                            knowledge work.
+  3. gpt-5.6-luna           Fast, cost-efficient model for simpler tasks.
+  4. gpt-5.4-mini           Small, fast, and cost-efficient model for simpler
+                            coding tasks.
+
+  Press enter to confirm or esc to go back

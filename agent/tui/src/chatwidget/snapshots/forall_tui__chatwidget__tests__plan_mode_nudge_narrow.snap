@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/plan_mode.rs
+assertion_line: 120
+expression: "render_bottom_popup(&chat, 36)"
+---
+                       gpt-5 default
+╭──────────────────────────────────╮
+│▌ make a plan                     │
+╰──────────────────────────────────╯
+Create a plan?  shift + tab use Pla…

@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests/model_catalog.rs
+assertion_line: 387
+expression: model_migration_copy_to_plain_text(&copy)
+---
+Introducing GPT-5.6 Sol
+
+Forall just got an upgrade with GPT-5.6 Sol, OpenAI's flagship frontier model for the hardest coding, research, and real-world work, with a 1M-token context window.
+
+You can always keep using GPT-5.3-Codex if you prefer.

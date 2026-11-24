@@ -1,0 +1,10 @@
+---
+source: tui/src/keymap_setup.rs
+assertion_line: 1356
+expression: "render_debug(&view, 80)"
+---
+Keypress Inspector
+Press any key to see what Forall receives. Esc is inspected; Ctrl+C closes.
+Tip: Forall can only inspect keys your terminal sends.
+
+Waiting for a keypress...

@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1772
+expression: rendered
+---
+• Ran set -o pipefail
+  │ cargo test -p forall-tui
+  │ --quiet
+  └ (no output)

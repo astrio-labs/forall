@@ -1,0 +1,30 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-core-api"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_core_api"
+path = "src/lib.rs"
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-app-server-protocol = { workspace = true }
+forall-arg0 = { workspace = true }
+forall-analytics = { workspace = true }
+forall-config = { workspace = true }
+forall-core = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-home = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-features = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider-info = { workspace = true }
+forall-models-manager = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-absolute-path = { workspace = true }

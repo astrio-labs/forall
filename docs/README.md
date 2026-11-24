@@ -14,6 +14,6 @@
 
 ## Open-source crates
 
-The [crates](../crates/) directory publishes the Rust libraries embedded by the
-`forall` binary. The full agent runtime is distributed as the prebuilt CLI; see
+The [agent workspace](../agent/) builds the CLI and terminal UI.
+The public authoring, verification client, and protocol libraries are listed in
 [crates/README.md](../crates/README.md).

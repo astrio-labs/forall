@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 7846
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────╮"
+"│▌ /ar                                                     │"
+"│                                                          │"
+"╰──────────────────────────────────────────────────────────╯"
+"  /archive  archive this session and exit                   "

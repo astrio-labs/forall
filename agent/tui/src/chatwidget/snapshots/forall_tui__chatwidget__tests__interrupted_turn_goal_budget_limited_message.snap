@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/review_mode.rs
+assertion_line: 1273
+expression: last
+---
+■ Goal budget reached - the turn was stopped.

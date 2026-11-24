@@ -1,0 +1,6 @@
+---
+source: tui/src/markdown_render_tests.rs
+assertion_line: 945
+expression: rendered
+---
+See forall-rs/tui/src/markdown_render.rs:74.

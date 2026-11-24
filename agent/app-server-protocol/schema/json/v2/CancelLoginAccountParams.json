@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Params for `account/login/cancel`. `login_id` identifies the in-flight login returned by `account/login/start`.",
+  "properties": {
+    "loginId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "loginId"
+  ],
+  "title": "CancelLoginAccountParams",
+  "type": "object"
+}

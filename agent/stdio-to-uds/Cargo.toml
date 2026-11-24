@@ -1,0 +1,33 @@
+[package]
+name = "forall-stdio-to-uds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "forall-stdio-to-uds"
+path = "src/main.rs"
+
+[lib]
+name = "forall_stdio_to_uds"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-uds = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "io-util",
+    "macros",
+    "rt-multi-thread",
+] }
+
+[dev-dependencies]
+forall-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

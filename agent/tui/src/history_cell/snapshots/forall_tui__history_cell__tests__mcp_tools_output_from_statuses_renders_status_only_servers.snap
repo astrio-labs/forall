@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 915
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • plugin_docs
+    • Auth: Unsupported
+    • Tools: lookup

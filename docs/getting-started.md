@@ -4,34 +4,36 @@ Choose one path:
 
 ## 1. Forall CLI (full coding agent)
 
-Install and run Forall as your agent:
+Install Rust through rustup, Git, and a native C/C++ toolchain. On macOS, use
+the Xcode Command Line Tools. On Linux, install pkg-config and OpenSSL development
+headers. The `agent/` directory pins the Rust toolchain used for the CLI.
 
 ```bash
-curl -fsSL https://forall.astrio.app/install.sh | bash
-forall
+git clone https://github.com/astrio-labs/forall.git
+cd forall/agent
+cargo build --locked -p forall-cli --bin forall
+export PATH="$PWD/target/debug:$PATH"
+forall --version
 ```
 
-On first launch, pick:
-
-| Option | What happens |
-|--------|-------------|
-| **Forall account** | Your browser opens to sign in — then chat on your plan's hosted models, or add BYOK keys any time |
-| **Bring your own API key** | Pick a provider and use keys from `~/.forall/.env` (matrix below) |
-
-CLI equivalents:
-
-```bash
-forall login                                          # browser sign-in
-printenv FORALL_API_KEY | forall verification login   # headless, API key
-forall verification status
-```
-
-Then initialize a project from a git repo root:
+Run these commands in the Git repository you want Forall to edit.
 
 ```bash
 forall init
 forall
 ```
+
+Choose **Bring your own API key** in the terminal. A local run can use your
+provider credentials without an Astrio account. Use `forall exec` for a
+non-interactive session.
+
+### Local verification
+
+Run `forall check` from the initialized project. For TypeScript contracts,
+install Node.js and the workflow's JavaScript dependencies with `npm ci` in
+`agent/workflow/` in the source checkout. LemmaScript uses Dafny for proofs.
+Other languages use their corresponding verification tools, including Verus
+for Rust, OpenJML for Java, and Frama-C for C.
 
 See [Project Layout](project-layout.md) and [Workflow](workflow.md).
 
@@ -50,20 +52,14 @@ Set keys in `~/.forall/.env` (or export them in your shell), then pick the provi
 
 ### Telemetry
 
-First-party builds send product usage analytics — feature and reliability events, never your code or prompts. Opt out in `~/.forall/config.toml`:
+Product analytics require an explicitly configured ingest endpoint. To disable
+product analytics even when an endpoint has been configured, set the following
+in `~/.forall/config.toml`.
 
 ```toml
 [analytics]
 enabled = false
 ```
-
-### Supported platforms
-
-| OS | Architectures |
-|----|---------------|
-| macOS | Apple Silicon (`aarch64`), Intel (`x86_64`) |
-| Linux | `x86_64`, `aarch64` |
-| Windows | `x86_64` |
 
 ## 2. MCP verify-only (Cursor / Claude Code / Codex)
 

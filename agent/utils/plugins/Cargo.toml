@@ -1,0 +1,25 @@
+
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-utils-plugins"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_utils_plugins"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-exec-server = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

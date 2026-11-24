@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/plan_mode.rs
+assertion_line: 133
+expression: popup
+---
+  Implement this plan?
+
+› 1. Yes, implement this plan          Switch to Default and start coding.
+  2. Yes, clear context and implement  Fresh thread with this plan.
+  3. No, stay in Plan mode             Continue planning with the model.
+
+  Press enter to confirm or esc to go back

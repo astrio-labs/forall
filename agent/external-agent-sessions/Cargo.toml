@@ -1,0 +1,25 @@
+[package]
+name = "forall-external-agent-sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "forall_external_agent_sessions"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+forall-protocol = { workspace = true }
+forall-utils-output-truncation = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+forall-app-server-protocol = { workspace = true }
+tempfile = { workspace = true }

@@ -1,0 +1,132 @@
+[package]
+name = "forall-app-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "forall-app-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "forall-app-server-test-notify-capture"
+path = "src/bin/notify_capture.rs"
+
+[lib]
+name = "forall_app_server"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+    "ws",
+] }
+forall-analytics = { workspace = true }
+forall-arg0 = { workspace = true }
+forall-config = { workspace = true }
+forall-core = { workspace = true }
+forall-core-plugins = { workspace = true }
+forall-home = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-extension-api = { workspace = true }
+forall-external-agent-migration = { workspace = true }
+forall-external-agent-sessions = { workspace = true }
+forall-features = { workspace = true }
+forall-goal-extension = { workspace = true }
+forall-guardian = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-file-watcher = { workspace = true }
+forall-hooks = { workspace = true }
+forall-otel = { workspace = true }
+forall-plugin = { workspace = true }
+forall-shell-command = { workspace = true }
+forall-skills-extension = { workspace = true }
+forall-utils-cli = { workspace = true }
+forall-utils-pty = { workspace = true }
+forall-file-search = { workspace = true }
+forall-login = { workspace = true }
+forall-image-generation-extension = { workspace = true }
+forall-memories-extension = { workspace = true }
+forall-web-search-extension = { workspace = true }
+forall-memories-write = { workspace = true }
+forall-mcp = { workspace = true }
+forall-mcp-extension = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-model-provider-info = { workspace = true }
+forall-models-manager = { workspace = true }
+forall-protocol = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-app-server-transport = { workspace = true }
+forall-feedback = { workspace = true }
+forall-rmcp-client = { workspace = true }
+forall-rollout = { workspace = true }
+forall-sandboxing = { workspace = true }
+forall-state = { workspace = true }
+forall-thread-store = { workspace = true }
+forall-tools = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-json-to-toml = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[target.'cfg(windows)'.dependencies]
+forall-windows-sandbox = { workspace = true }
+
+[dev-dependencies]
+app_test_support = { workspace = true }
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+] }
+base64 = { workspace = true }
+forall-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
+flate2 = { workspace = true }
+hmac = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+rmcp = { workspace = true, default-features = false, features = [
+    "elicitation",
+    "server",
+    "transport-streamable-http-server",
+] }
+serial_test = { workspace = true }
+sha2 = { workspace = true }
+shlex = { workspace = true }
+tar = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+url = { workspace = true }
+wiremock = { workspace = true }

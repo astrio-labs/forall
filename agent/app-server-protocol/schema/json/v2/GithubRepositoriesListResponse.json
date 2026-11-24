@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GithubRepository": {
+      "description": "A repository visible to the connected GitHub account.",
+      "properties": {
+        "cloneUrl": {
+          "description": "HTTPS clone URL; the stored connection authenticates it via the git credential helper.",
+          "type": "string"
+        },
+        "defaultBranch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fullName": {
+          "description": "`owner/name`.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "description": "Login of the owning user or organization.",
+          "type": "string"
+        },
+        "private": {
+          "type": "boolean"
+        },
+        "pushedAt": {
+          "description": "RFC 3339 time of the last push.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cloneUrl",
+        "fullName",
+        "name",
+        "owner",
+        "private"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "repositories": {
+      "description": "Most recently pushed first.",
+      "items": {
+        "$ref": "#/definitions/GithubRepository"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "repositories"
+  ],
+  "title": "GithubRepositoriesListResponse",
+  "type": "object"
+}

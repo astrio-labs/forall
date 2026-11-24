@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/history_replay.rs
+assertion_line: 745
+expression: combined
+---
+• Thread forked from app-server-parent-thread (e9f18a88-8081-4e51-9d4e-8af5cde2d8dd)

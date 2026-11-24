@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 4658
+expression: terminal.backend()
+---
+"╭──────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│▌ $sa                                                                                             │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"  Sample Plugin  [Plugin] Plugin that includes the Figma MCP server and Skills for common workflows "
+"                                                                                                    "
+"  Press enter to insert or esc to close                                                             "

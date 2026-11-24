@@ -1,0 +1,36 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-model-provider"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_model_provider"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+forall-api = { workspace = true }
+forall-aws-auth = { workspace = true }
+forall-client = { workspace = true }
+forall-feedback = { workspace = true }
+forall-login = { workspace = true }
+forall-model-provider-info = { workspace = true }
+forall-models-manager = { workspace = true }
+forall-otel = { workspace = true }
+forall-protocol = { workspace = true }
+forall-response-debug-context = { workspace = true }
+http = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing = { workspace = true, features = ["log"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+wiremock = { workspace = true }

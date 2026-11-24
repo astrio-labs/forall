@@ -1,0 +1,571 @@
+pub use auth::McpAuthStatusEntry;
+pub use auth::McpOAuthLoginConfig;
+pub use auth::McpOAuthLoginSupport;
+pub use auth::McpOAuthScopesSource;
+pub use auth::ResolvedMcpOAuthScopes;
+pub use auth::compute_auth_statuses;
+pub use auth::discover_supported_scopes;
+pub use auth::oauth_login_support;
+pub use auth::resolve_oauth_scopes;
+pub use auth::should_retry_without_scopes;
+
+pub(crate) mod auth;
+
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use async_channel::unbounded;
+use forall_config::Constrained;
+use forall_config::McpServerConfig;
+use forall_config::McpServerTransportConfig;
+use forall_config::types::AppToolApproval;
+use forall_config::types::AuthKeyringBackendKind;
+use forall_config::types::OAuthCredentialsStoreMode;
+use forall_login::ForallAuth;
+use forall_plugin::PluginCapabilitySummary;
+use forall_protocol::mcp::McpServerInfo;
+use forall_protocol::mcp::Resource;
+use forall_protocol::mcp::ResourceTemplate;
+use forall_protocol::mcp::Tool;
+use forall_protocol::models::PermissionProfile;
+use forall_protocol::protocol::AskForApproval;
+use forall_protocol::protocol::McpAuthStatus;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResult;
+use serde_json::Value;
+use tokio_util::sync::CancellationToken;
+
+use crate::ResolvedMcpCatalog;
+use crate::connection_manager::McpConnectionManager;
+use crate::runtime::McpRuntimeContext;
+use crate::server::EffectiveMcpServer;
+
+pub const PLAYWRIGHT_MCP_SERVER_NAME: &str = "playwright";
+const MCP_TOOL_NAME_PREFIX: &str = "mcp";
+const MCP_TOOL_NAME_DELIMITER: &str = "__";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum McpSnapshotDetail {
+    #[default]
+    Full,
+    ToolsAndAuthOnly,
+}
+
+impl McpSnapshotDetail {
+    fn include_resources(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+pub fn qualified_mcp_tool_name_prefix(server_name: &str) -> String {
+    sanitize_responses_api_tool_name(&format!(
+        "{MCP_TOOL_NAME_PREFIX}{MCP_TOOL_NAME_DELIMITER}{server_name}{MCP_TOOL_NAME_DELIMITER}"
+    ))
+}
+
+/// Returns true when MCP permission prompts should resolve as approved instead
+/// of being shown to the user.
+pub fn mcp_permission_prompt_is_auto_approved(
+    approval_policy: AskForApproval,
+    permission_profile: &PermissionProfile,
+    context: McpPermissionPromptAutoApproveContext,
+) -> bool {
+    if context.tool_approval_mode == Some(AppToolApproval::Approve) {
+        return true;
+    }
+
+    if approval_policy != AskForApproval::Never {
+        return false;
+    }
+
+    match permission_profile {
+        PermissionProfile::Disabled | PermissionProfile::External { .. } => true,
+        PermissionProfile::Managed { file_system, .. } => {
+            file_system.to_sandbox_policy().has_full_disk_write_access()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct McpPermissionPromptAutoApproveContext {
+    pub tool_approval_mode: Option<AppToolApproval>,
+}
+
+/// MCP runtime settings derived from `forall_core::config::Config`.
+///
+/// This struct should contain only long-lived configuration values that the
+/// `forall-mcp` crate needs to construct server transports, enforce MCP
+/// approval/sandbox policy, locate OAuth state, and merge plugin-provided MCP
+/// servers. Request-scoped or auth-scoped state should not be stored here;
+/// thread those values explicitly into runtime entry points such as
+/// [`effective_mcp_servers`] and snapshot collection helpers so config objects
+/// do not go stale when auth changes.
+#[derive(Debug, Clone)]
+pub struct McpConfig {
+    /// Forall home directory used for MCP OAuth state and app-tool cache files.
+    pub forall_home: PathBuf,
+    /// Preferred credential store for MCP OAuth tokens.
+    pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
+    /// Backend used when MCP OAuth storage is configured for keyring-backed persistence.
+    pub auth_keyring_backend_kind: AuthKeyringBackendKind,
+    /// Optional fixed localhost callback port for MCP OAuth login.
+    pub mcp_oauth_callback_port: Option<u16>,
+    /// Optional OAuth redirect URI override for MCP login.
+    pub mcp_oauth_callback_url: Option<String>,
+    /// Whether skill MCP dependency installation prompts are enabled.
+    pub skill_mcp_dependency_install_enabled: bool,
+    /// Approval policy used for MCP tool calls and MCP elicitation requests.
+    pub approval_policy: Constrained<AskForApproval>,
+    /// Optional path to `forall-linux-sandbox` for sandboxed MCP tool execution.
+    pub forall_linux_sandbox_exe: Option<PathBuf>,
+    /// Whether to use legacy Landlock behavior in the MCP sandbox state.
+    pub use_legacy_landlock: bool,
+    /// Whether model-visible MCP tool namespaces should keep the legacy
+    /// `mcp__` prefix.
+    pub prefix_mcp_tool_names: bool,
+    /// Client-side elicitation capabilities advertised during MCP initialization.
+    pub client_elicitation_capability: ElicitationCapability,
+    /// Resolved MCP registrations keyed by logical server name.
+    pub mcp_server_catalog: ResolvedMcpCatalog,
+    /// Plugin metadata used to attribute connector tools to plugin display names.
+    /// MCP registrations retain their own package attribution in the catalog.
+    pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolPluginProvenance {
+    plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
+    plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
+    plugin_ids_by_mcp_server_name: HashMap<String, String>,
+    selected_plugin_mcp_server_names: HashSet<String>,
+}
+
+impl ToolPluginProvenance {
+    pub fn plugin_display_names_for_connector_id(&self, connector_id: &str) -> &[String] {
+        self.plugin_display_names_by_connector_id
+            .get(connector_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
+        self.plugin_display_names_by_mcp_server_name
+            .get(server_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
+        self.plugin_ids_by_mcp_server_name
+            .get(server_name)
+            .map(String::as_str)
+    }
+
+    pub(crate) fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
+        self.selected_plugin_mcp_server_names.contains(server_name)
+    }
+
+    fn from_config(config: &McpConfig) -> Self {
+        let mut tool_plugin_provenance = Self::default();
+
+        for (server_name, attribution) in config
+            .mcp_server_catalog
+            .plugin_attributions_by_server_name()
+        {
+            tool_plugin_provenance
+                .plugin_display_names_by_mcp_server_name
+                .insert(
+                    server_name.clone(),
+                    vec![attribution.display_name().to_string()],
+                );
+            tool_plugin_provenance
+                .plugin_ids_by_mcp_server_name
+                .insert(server_name, attribution.plugin_id().to_string());
+        }
+        tool_plugin_provenance
+            .selected_plugin_mcp_server_names
+            .extend(
+                config
+                    .mcp_server_catalog
+                    .selected_plugin_server_names()
+                    .map(str::to_string),
+            );
+
+        for plugin_names in tool_plugin_provenance
+            .plugin_display_names_by_connector_id
+            .values_mut()
+            .chain(
+                tool_plugin_provenance
+                    .plugin_display_names_by_mcp_server_name
+                    .values_mut(),
+            )
+        {
+            plugin_names.sort_unstable();
+            plugin_names.dedup();
+        }
+        tool_plugin_provenance
+    }
+}
+
+pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
+    config.mcp_server_catalog.configured_servers()
+}
+
+pub fn effective_mcp_servers(
+    config: &McpConfig,
+    auth: Option<&ForallAuth>,
+) -> HashMap<String, EffectiveMcpServer> {
+    effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
+}
+
+/// Converts a materialized server map to its auth-gated runtime view.
+///
+/// Compatibility built-ins and extension overlays must already be reflected in
+/// `configured_servers`; this function does not synthesize missing servers.
+pub fn effective_mcp_servers_from_configured(
+    configured_servers: HashMap<String, McpServerConfig>,
+    _config: &McpConfig,
+    _auth: Option<&ForallAuth>,
+) -> HashMap<String, EffectiveMcpServer> {
+    configured_servers
+        .into_iter()
+        .map(|(name, server)| (name, EffectiveMcpServer::configured(server)))
+        .collect()
+}
+
+pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {
+    ToolPluginProvenance::from_config(config)
+}
+
+pub async fn read_mcp_resource(
+    config: &McpConfig,
+    auth: Option<&ForallAuth>,
+    runtime_context: McpRuntimeContext,
+    server: &str,
+    uri: &str,
+) -> anyhow::Result<ReadResourceResult> {
+    let mut mcp_servers = effective_mcp_servers(config, auth);
+    mcp_servers.retain(|name, _| name == server);
+    let auth_statuses = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
+        auth,
+    )
+    .await;
+    let (tx_event, rx_event) = unbounded();
+    drop(rx_event);
+    let cancel_token = CancellationToken::new();
+    let manager = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
+        auth_statuses,
+        &config.approval_policy,
+        String::new(),
+        tx_event,
+        cancel_token.clone(),
+        PermissionProfile::default(),
+        runtime_context,
+        config.forall_home.clone(),
+        config.prefix_mcp_tool_names,
+        config.client_elicitation_capability.clone(),
+        /*supports_openai_form_elicitation*/ false,
+        tool_plugin_provenance(config),
+        auth,
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+
+    let result = manager
+        .read_resource(server, ReadResourceRequestParams::new(uri))
+        .await;
+    cancel_token.cancel();
+    result
+}
+
+#[derive(Debug, Clone)]
+pub struct McpServerStatusSnapshot {
+    pub server_infos: HashMap<String, McpServerInfo>,
+    pub tools_by_server: HashMap<String, HashMap<String, Tool>>,
+    pub resources: HashMap<String, Vec<Resource>>,
+    pub resource_templates: HashMap<String, Vec<ResourceTemplate>>,
+    pub auth_statuses: HashMap<String, McpAuthStatus>,
+    pub server_names: Vec<String>,
+}
+
+pub async fn collect_mcp_server_status_snapshot_with_detail(
+    config: &McpConfig,
+    auth: Option<&ForallAuth>,
+    submit_id: String,
+    runtime_context: McpRuntimeContext,
+    detail: McpSnapshotDetail,
+) -> McpServerStatusSnapshot {
+    let mcp_servers = effective_mcp_servers(config, auth);
+    let tool_plugin_provenance = tool_plugin_provenance(config);
+    if mcp_servers.is_empty() {
+        return McpServerStatusSnapshot {
+            server_infos: HashMap::new(),
+            tools_by_server: HashMap::new(),
+            resources: HashMap::new(),
+            resource_templates: HashMap::new(),
+            auth_statuses: HashMap::new(),
+            server_names: Vec::new(),
+        };
+    }
+
+    let auth_status_entries = compute_auth_statuses(
+        mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
+        auth,
+    )
+    .await;
+
+    let server_names = mcp_servers.keys().cloned().collect();
+
+    let (tx_event, rx_event) = unbounded();
+    drop(rx_event);
+
+    let cancel_token = CancellationToken::new();
+    let mcp_connection_manager = McpConnectionManager::new(
+        &mcp_servers,
+        config.mcp_oauth_credentials_store_mode,
+        config.auth_keyring_backend_kind,
+        auth_status_entries.clone(),
+        &config.approval_policy,
+        submit_id,
+        tx_event,
+        cancel_token.clone(),
+        PermissionProfile::default(),
+        runtime_context,
+        config.forall_home.clone(),
+        config.prefix_mcp_tool_names,
+        config.client_elicitation_capability.clone(),
+        /*supports_openai_form_elicitation*/ false,
+        tool_plugin_provenance,
+        auth,
+        /*elicitation_reviewer*/ None,
+    )
+    .await;
+
+    let snapshot = collect_mcp_server_status_snapshot_from_manager(
+        &mcp_connection_manager,
+        auth_status_entries,
+        server_names,
+        detail,
+    )
+    .await;
+
+    cancel_token.cancel();
+
+    snapshot
+}
+
+/// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// MCP server/tool names are user-controlled, so sanitize the fully-qualified
+/// name we expose to the model by replacing any disallowed character with `_`.
+pub(crate) fn sanitize_responses_api_tool_name(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            sanitized.push(c);
+        } else {
+            sanitized.push('_');
+        }
+    }
+
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Built-in Playwright MCP server for browser automation (computer use).
+pub fn playwright_mcp_server_config() -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@playwright/mcp@latest".to_string()],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        environment_id: forall_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: Some(Duration::from_secs(60)),
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    }
+}
+
+fn protocol_tool_from_rmcp_tool(name: &str, tool: &rmcp::model::Tool) -> Option<Tool> {
+    match serde_json::to_value(tool) {
+        Ok(value) => match Tool::from_mcp_value(value) {
+            Ok(tool) => Some(tool),
+            Err(err) => {
+                tracing::warn!("Failed to convert MCP tool '{name}': {err}");
+                None
+            }
+        },
+        Err(err) => {
+            tracing::warn!("Failed to serialize MCP tool '{name}': {err}");
+            None
+        }
+    }
+}
+
+fn auth_statuses_from_entries(
+    auth_status_entries: &HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+) -> HashMap<String, McpAuthStatus> {
+    auth_status_entries
+        .iter()
+        .map(|(name, entry)| (name.clone(), entry.auth_status))
+        .collect::<HashMap<_, _>>()
+}
+
+fn convert_mcp_resources(
+    resources: HashMap<String, Vec<rmcp::model::Resource>>,
+) -> HashMap<String, Vec<Resource>> {
+    resources
+        .into_iter()
+        .map(|(name, resources)| {
+            let resources = resources
+                .into_iter()
+                .filter_map(|resource| match serde_json::to_value(resource) {
+                    Ok(value) => match Resource::from_mcp_value(value.clone()) {
+                        Ok(resource) => Some(resource),
+                        Err(err) => {
+                            let (uri, resource_name) = match value {
+                                Value::Object(obj) => (
+                                    obj.get("uri")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                    obj.get("name")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                ),
+                                _ => (None, None),
+                            };
+
+                            tracing::warn!(
+                                "Failed to convert MCP resource (uri={uri:?}, name={resource_name:?}): {err}"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize MCP resource: {err}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            (name, resources)
+        })
+        .collect::<HashMap<_, _>>()
+}
+
+fn convert_mcp_resource_templates(
+    resource_templates: HashMap<String, Vec<rmcp::model::ResourceTemplate>>,
+) -> HashMap<String, Vec<ResourceTemplate>> {
+    resource_templates
+        .into_iter()
+        .map(|(name, templates)| {
+            let templates = templates
+                .into_iter()
+                .filter_map(|template| match serde_json::to_value(template) {
+                    Ok(value) => match ResourceTemplate::from_mcp_value(value.clone()) {
+                        Ok(template) => Some(template),
+                        Err(err) => {
+                            let (uri_template, template_name) = match value {
+                                Value::Object(obj) => (
+                                    obj.get("uriTemplate")
+                                        .or_else(|| obj.get("uri_template"))
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                    obj.get("name")
+                                        .and_then(|v| v.as_str().map(ToString::to_string)),
+                                ),
+                                _ => (None, None),
+                            };
+
+                            tracing::warn!(
+                                "Failed to convert MCP resource template (uri_template={uri_template:?}, name={template_name:?}): {err}"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("Failed to serialize MCP resource template: {err}");
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            (name, templates)
+        })
+        .collect::<HashMap<_, _>>()
+}
+
+async fn collect_mcp_server_status_snapshot_from_manager(
+    mcp_connection_manager: &McpConnectionManager,
+    auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    server_names: Vec<String>,
+    detail: McpSnapshotDetail,
+) -> McpServerStatusSnapshot {
+    let (tools, resources, resource_templates) = tokio::join!(
+        mcp_connection_manager.list_all_tools(),
+        async {
+            if detail.include_resources() {
+                mcp_connection_manager.list_all_resources(|_| true).await
+            } else {
+                HashMap::new()
+            }
+        },
+        async {
+            if detail.include_resources() {
+                mcp_connection_manager
+                    .list_all_resource_templates(|_| true)
+                    .await
+            } else {
+                HashMap::new()
+            }
+        },
+    );
+    let server_infos = mcp_connection_manager.list_available_server_infos().await;
+
+    let mut tools_by_server = HashMap::<String, HashMap<String, Tool>>::new();
+    for tool_info in tools {
+        let raw_tool_name = tool_info.tool.name.to_string();
+        let Some(tool) = protocol_tool_from_rmcp_tool(&raw_tool_name, &tool_info.tool) else {
+            continue;
+        };
+        let tool_name = tool.name.clone();
+        tools_by_server
+            .entry(tool_info.server_name)
+            .or_default()
+            .insert(tool_name, tool);
+    }
+
+    McpServerStatusSnapshot {
+        server_infos,
+        tools_by_server,
+        resources: convert_mcp_resources(resources),
+        resource_templates: convert_mcp_resource_templates(resource_templates),
+        auth_statuses: auth_statuses_from_entries(&auth_status_entries),
+        server_names,
+    }
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

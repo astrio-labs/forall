@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+assertion_line: 1435
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"                                                                 gpt-5.4 default"
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│▌ Ask Forall to do anything                                                   │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+"gpt-5.4                                               Goal achieved (2d 23h 42m)"

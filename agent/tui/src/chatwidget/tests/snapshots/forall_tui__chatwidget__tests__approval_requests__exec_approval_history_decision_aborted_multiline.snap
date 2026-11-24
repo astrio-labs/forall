@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/approval_requests.rs
+assertion_line: 424
+expression: lines_to_single_string(&aborted_multi)
+---
+✗ You canceled the request to run echo line1 ...

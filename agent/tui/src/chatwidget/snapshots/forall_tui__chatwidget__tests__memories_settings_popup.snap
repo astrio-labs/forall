@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2805
+expression: popup
+---
+  Memories
+  Choose how Forall uses and creates memories. Changes are saved to config.tom
+
+› [x] Use memories       Use memories in the following threads. Applied at
+                         next thread.
+  [ ] Generate memories  Generate memories from the following threads. Current
+                         thread included.
+  Reset all memories     Clear local memory files and summaries. Existing
+                         threads stay intact.
+
+  Learn more: https://forall.astrio.app/dashboard
+
+  Press space to toggle; enter to save or select

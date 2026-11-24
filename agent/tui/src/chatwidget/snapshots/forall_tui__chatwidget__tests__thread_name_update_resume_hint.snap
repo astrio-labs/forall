@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 1035
+expression: rendered
+---
+• Session renamed to review-fix. To resume this session run forall resume, then select review-fix (123e4567-e89b-12d3-a456-426614174000)

@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "A GitHub connect flow has started; the client should open `auth_url` in a browser. Completion is reported via `account/github/connect/completed`, and the flow can be aborted with `account/github/connect/cancel`.",
+  "properties": {
+    "authUrl": {
+      "type": "string"
+    },
+    "connectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "authUrl",
+    "connectId"
+  ],
+  "title": "GithubConnectStartResponse",
+  "type": "object"
+}

@@ -16,10 +16,5 @@ We will acknowledge receipt and work on a fix. We ask that you allow reasonable 
 
 ## Scope
 
-This policy covers:
-
-- The `install.sh` script in this repository
-- Documentation and community assets published here
-- Prebuilt `forall` binaries distributed via [GitHub Releases](https://github.com/astrio-labs/forall-mcp/releases)
-
-Agent source code is not published in this repository.
+This policy covers the CLI and its runtime, public Rust libraries, MCP bridge,
+and documentation in this repository.

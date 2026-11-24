@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 205
+expression: popup
+---
+  Plugins
+  Browse plugins from available marketplaces.
+  Installed 1 of 4 available plugins.
+
+  [All Plugins]  Installed (1)  Curated  Workspace  Shared with me  Repo Marketplace  Add Marketplace
+
+  Type to search plugins
+› [ ] Alpha Sync          Disabled               Space to enable; Enter view details.
+  [-] Bravo Search        Available            · Curated · Search docs and tickets.
+  [-] Hidden Repo Plugin  Available            · Repo Marketplace · Should not be shown in /plugins.
+  [-] Starter             Available by default · Curated · Included by default.
+
+  space enable/disable · ←/→ select marketplace · enter view details · esc close

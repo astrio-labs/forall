@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "PermissionRequestBehaviorWire": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestDecisionWire": {
+      "additionalProperties": false,
+      "properties": {
+        "behavior": {
+          "$ref": "#/definitions/PermissionRequestBehaviorWire"
+        },
+        "interrupt": {
+          "default": false,
+          "description": "Reserved for future short-circuiting semantics.\n\nPermissionRequest hooks currently fail closed if this field is `true`.",
+          "type": "boolean"
+        },
+        "message": {
+          "default": null,
+          "type": "string"
+        },
+        "updatedInput": {
+          "default": null,
+          "description": "Reserved for a future input-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+        },
+        "updatedPermissions": {
+          "default": null,
+          "description": "Reserved for a future permission-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+        }
+      },
+      "required": [
+        "behavior"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestDecisionWire"
+            }
+          ],
+          "default": null
+        },
+        "hookEventName": {
+          "const": "PermissionRequest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "VerificationStateWire": {
+      "enum": [
+        "fresh",
+        "stale",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "VerificationSummaryWire": {
+      "properties": {
+        "change": {
+          "type": "string"
+        },
+        "criticalIssues": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "propertyTested": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "proved": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reportPath": {
+          "type": "string"
+        },
+        "specTracked": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "staleGrade": {
+          "description": "Which kind of drift a `stale` state refers to (`code_drift`, `spec_drift`, `toolchain_drift`, `unknown`). Open string so future grades stay additive.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/VerificationStateWire"
+        },
+        "totalRequirements": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "criticalIssues",
+        "propertyTested",
+        "proved",
+        "specTracked",
+        "state",
+        "totalRequirements"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionRequestHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    },
+    "verificationSummary": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/VerificationSummaryWire"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "permission-request.command.output",
+  "type": "object"
+}

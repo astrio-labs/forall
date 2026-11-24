@@ -1,0 +1,40 @@
+name: CLI source build
+
+on:
+  push:
+    branches: [main]
+    paths: ['agent/**', 'crates/**', 'Cargo.toml', '.github/workflows/cli.yml']
+  pull_request:
+    paths: ['agent/**', 'crates/**', 'Cargo.toml', '.github/workflows/cli.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build the CLI from the locked workspace
+        run: cargo build --locked -p forall-cli --bin forall
+      - name: Initialize a project with the built executable
+        run: |
+          cli="$PWD/target/debug/forall"
+          export FORALL_HOME="$RUNNER_TEMP/forall-home"
+          mkdir -p "$FORALL_HOME"
+          git init "$RUNNER_TEMP/example"
+          cd "$RUNNER_TEMP/example"
+          "$cli" --version
+          "$cli" init
+          test -f .forall/markers.toml
+      - name: Check passing and failing local properties
+        run: cargo test --locked -p forall-workflow --test workflow_extensions python_property_
+      - name: Exercise an editing turn with a local model fixture
+        run: cargo test --locked -p forall-exec --test all test_apply_patch_tool

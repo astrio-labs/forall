@@ -1,0 +1,101 @@
+name: forall
+version: 1
+description: Forall spec-driven development with formal verification
+# Per-change workflow class is set in .forall/changes/<name>/change.yaml (standard | micro).
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Why this change is needed
+    template: proposal.md
+    instruction: |
+      Create the proposal that establishes WHY this change is needed.
+
+      Sections:
+      - **Why**: Problem or opportunity (1-2 sentences)
+      - **What Changes**: Bullet list of changes; mark **BREAKING** where applicable
+      - **Capabilities**: New and modified capabilities (kebab-case). Each becomes specs/<capability>/spec.md
+      - **Impact**: Affected code, APIs, dependencies
+
+      Under **Verification scope**: list capabilities whose logic gets `verified: true`
+      (in-scope for formal proof — intent, not a record of success; `forall check` earns
+      the evidence into the verify ledger).
+      Default TS logic (validation, bounds, parsing, scoring) to proved — not property-tested.
+      Reserve `property_tested` for explicit user PBT requests or quantified infinite-domain properties.
+    requires: []
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Requirements and scenarios (delta specs)
+    template: spec.md
+    instruction: |
+      Create one spec file per capability from the proposal under specs/<capability>/spec.md.
+
+      Use delta sections: ## ADDED / MODIFIED / REMOVED / RENAMED Requirements
+      Each requirement: ### Requirement: <name> with SHALL/MUST prose
+      Each scenario: #### Scenario: <name> with WHEN/THEN bullets (exactly 4 hashtags)
+
+      Every requirement MUST have at least one scenario.
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: Technical design before implementation
+    template: design.md
+    instruction: |
+      Explain HOW to implement the change.
+
+      Sections: Context, Goals / Non-Goals, Decisions, Risks / Trade-offs,
+      Migration Plan, Open Questions.
+
+      Reference specs for requirements; keep code-level detail out of specs.
+    requires:
+      - proposal
+
+  - id: verification
+    generates: verification.md
+    description: Verification plan and mapping delta
+    template: verification.md
+    instruction: |
+      Default every precise logic requirement to formal verification scope (`verified: true`).
+      The flag states intent — what `forall check` must prove. The check itself earns the
+      evidence into the verify ledger; never edit `*-ledger.json` by hand.
+
+      For each such requirement:
+      - Assign requirement id (kebab-case)
+      - Name source file + symbols
+      - Draft contract clauses from requirement prose
+      - Plan native `author.*` operations for requirements and contracts
+      - Set `verified: true` in mapping.delta.yaml (not `property_tested: true`)
+
+      Use `property_tested: true` only when the user asked for PBT or the property is
+      quantified over large/infinite input where proofs are not the right primary tier.
+
+      Update mapping.delta.yaml for this change (requirement → code links).
+    requires:
+      - specs
+      - design
+
+  - id: tasks
+    generates: tasks.md
+    description: Implementation checklist
+    template: tasks.md
+    instruction: |
+      Break down implementation as checkbox tasks: `- [ ] X.Y Description`
+
+      Include: implement code, scaffold contracts, run local `author.validate`,
+      then native `verify.submit` / `verify.status`. External MCP is optional.
+      Group under ## numbered headings.
+    requires:
+      - specs
+      - design
+      - verification
+
+apply:
+  requires:
+    - tasks
+  tracks: tasks.md
+  instruction: |
+    Read context files for this change. Complete pending tasks; mark `- [x]` when done.
+    After edits run native `author.validate`.
+    Before finishing submit with native `verify.submit` and poll `verify.status`.

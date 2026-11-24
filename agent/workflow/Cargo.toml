@@ -1,0 +1,45 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-workflow"
+version.workspace = true
+build = "build.rs"
+
+[lib]
+doctest = false
+name = "forall_workflow"
+path = "src/lib.rs"
+
+[[bin]]
+name = "forall-workflow"
+path = "src/bin/forall-workflow.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-utils-path = { workspace = true }
+toml_edit = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+regex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-c = { workspace = true }
+tree-sitter-java = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+chrono = { workspace = true }
+include_dir = { workspace = true }
+notify = { workspace = true }
+walkdir = { workspace = true, optional = true }
+
+[dev-dependencies]
+forall-utils-cargo-bin = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+default = []

@@ -1,0 +1,13 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1961
+expression: rendered
+---
+• Ran echo
+  │ this_is_a_very_long_si
+  │ ngle_token_that_will_w
+  │ … +2 lines
+  └ error: first line on
+    stderr
+    error: second line on
+    stderr

@@ -1,0 +1,12 @@
+---
+source: tui/src/bottom_pane/feedback_view.rs
+assertion_line: 717
+expression: rendered
+---
+Upload logs?
+
+The following files will be sent:
+  • forall-logs.log
+  • forall-doctor-report.json
+  • rollout.jsonl
+  • auto-review-rollout.jsonl

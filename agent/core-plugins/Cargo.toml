@@ -1,0 +1,57 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "forall-core-plugins"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "forall_core_plugins"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+forall-analytics = { workspace = true }
+forall-app-server-protocol = { workspace = true }
+forall-config = { workspace = true }
+forall-core-skills = { workspace = true }
+forall-exec-server = { workspace = true }
+forall-git-utils = { workspace = true }
+forall-hooks = { workspace = true }
+forall-login = { workspace = true }
+forall-mcp = { workspace = true }
+forall-model-provider = { workspace = true }
+forall-otel = { workspace = true }
+forall-plugin = { workspace = true }
+forall-protocol = { workspace = true }
+forall-tools = { workspace = true }
+forall-utils-absolute-path = { workspace = true }
+forall-utils-path-uri = { workspace = true }
+forall-utils-plugins = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+flate2 = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+reqwest = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+libc = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }
+wiremock = { workspace = true }

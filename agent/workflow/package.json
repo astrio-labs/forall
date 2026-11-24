@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "description": "Proof/scenario/property tool dependencies for forall-workflow",
+  "dependencies": {
+    "fast-check": "^3.23.2",
+    "lemmascript": "^0.5.7",
+    "tsx": "^4.19.3"
+  }
+}

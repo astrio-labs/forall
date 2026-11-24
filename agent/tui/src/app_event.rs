@@ -1,0 +1,900 @@
+//! Application-level events used to coordinate UI actions.
+//!
+//! `AppEvent` is the internal message bus between UI components and the top-level `App` loop.
+//! Widgets emit events to request actions that must be handled at the app layer (like opening
+//! pickers, persisting configuration, or shutting down the agent), without needing direct access to
+//! `App` internals.
+//!
+//! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
+//! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
+
+use std::path::PathBuf;
+
+use forall_app_server_protocol::MarketplaceAddResponse;
+use forall_app_server_protocol::MarketplaceRemoveResponse;
+use forall_app_server_protocol::MarketplaceUpgradeResponse;
+use forall_app_server_protocol::McpServerStatus;
+use forall_app_server_protocol::McpServerStatusDetail;
+use forall_app_server_protocol::PluginInstallResponse;
+use forall_app_server_protocol::PluginListResponse;
+use forall_app_server_protocol::PluginMarketplaceEntry;
+use forall_app_server_protocol::PluginReadParams;
+use forall_app_server_protocol::PluginReadResponse;
+use forall_app_server_protocol::PluginUninstallResponse;
+use forall_app_server_protocol::SkillsListResponse;
+use forall_app_server_protocol::ThreadGoalStatus;
+use forall_file_search::FileMatch;
+use forall_protocol::ThreadId;
+use forall_protocol::openai_models::ModelPreset;
+use forall_utils_absolute_path::AbsolutePathBuf;
+use forall_utils_approval_presets::ApprovalPreset;
+
+use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
+use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::UserMessage;
+use crate::goal_files::GoalDraft;
+use forall_app_server_protocol::AskForApproval;
+use forall_config::types::ApprovalsReviewer;
+use forall_features::Feature;
+use forall_plugin::PluginCapabilitySummary;
+use forall_protocol::config_types::CollaborationModeMask;
+use forall_protocol::models::ActivePermissionProfile;
+use forall_protocol::openai_models::ReasoningEffort;
+
+use crate::history_cell::HistoryCell;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadGoalSetMode {
+    ConfirmIfExists,
+    ReplaceExisting,
+    UpdateExisting {
+        status: ThreadGoalStatus,
+        token_budget: Option<i64>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HistoryLookupResponse {
+    pub(crate) offset: usize,
+    pub(crate) log_id: u64,
+    pub(crate) entry: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsolidationScrollbackReflow {
+    IfResizeReflowRan,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum WindowsSandboxEnableMode {
+    Elevated,
+    Legacy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PluginLocation {
+    Local { marketplace_path: AbsolutePathBuf },
+    Remote { marketplace_name: String },
+}
+
+impl PluginLocation {
+    pub(crate) fn into_request_params(self) -> (Option<AbsolutePathBuf>, Option<String>) {
+        match self {
+            PluginLocation::Local { marketplace_path } => (Some(marketplace_path), None),
+            PluginLocation::Remote { marketplace_name } => (None, Some(marketplace_name)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginRemoteSectionError {
+    pub(crate) section_id: String,
+    pub(crate) label: String,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeymapEditIntent {
+    ReplaceAll,
+    AddAlternate,
+    ReplaceOne { old_key: String },
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum AppEvent {
+    /// Open the agent picker for switching active threads.
+    OpenAgentPicker,
+    /// Switch the active thread to the selected agent.
+    SelectAgentThread(ThreadId),
+
+    /// Fork the current thread into a transient side conversation.
+    StartSide {
+        parent_thread_id: ThreadId,
+        user_message: Option<UserMessage>,
+    },
+
+    /// Submit an op to the specified thread, regardless of current focus.
+    SubmitThreadOp {
+        thread_id: ThreadId,
+        op: AppCommand,
+    },
+
+    /// Deliver a synthetic history lookup response to a specific thread channel.
+    ThreadHistoryEntryResponse {
+        thread_id: ThreadId,
+        event: HistoryLookupResponse,
+    },
+
+    /// Persist a submitted prompt in the cross-session message history.
+    AppendMessageHistoryEntry {
+        thread_id: ThreadId,
+        text: String,
+    },
+
+    /// Persist a branch discovered from an App git-action directive into thread metadata.
+    SyncThreadGitBranch {
+        thread_id: ThreadId,
+        branch: String,
+    },
+
+    /// Fetch a persistent cross-session message history entry by offset.
+    LookupMessageHistoryEntry {
+        thread_id: ThreadId,
+        offset: usize,
+        log_id: u64,
+    },
+
+    /// Start a new session.
+    NewSession,
+
+    /// Result of the fresh startup thread that is attached after the input UI is live.
+    StartupThreadStarted {
+        result: Result<AppServerStartedThread, String>,
+    },
+
+    /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
+    /// previous chat resumable.
+    ClearUi,
+
+    /// Re-render the transcript using the selected scrollback rendering mode.
+    RawOutputModeChanged {
+        enabled: bool,
+    },
+
+    /// Clear the current context, start a fresh session, and submit an initial user message.
+    ///
+    /// This is the Plan Mode handoff path: the previous thread remains resumable, but the model
+    /// sees only the explicit prompt carried in `text` once the new session is configured.
+    ClearUiAndSubmitUserMessage {
+        text: String,
+    },
+
+    /// Open the resume picker inside the running TUI session.
+    OpenResumePicker,
+
+    /// Open the Claude Code migration picker inside the running TUI session.
+    OpenExternalAgentConfigMigration,
+
+    /// Resume a thread by UUID or thread name inside the running TUI session.
+    ResumeSessionByIdOrName(String),
+
+    /// Archive the current active main thread and exit after it succeeds.
+    ArchiveCurrentThread,
+
+    /// Permanently delete the current active main thread and exit after it succeeds.
+    DeleteCurrentThread,
+
+    /// Fork the current session into a new thread.
+    ForkCurrentSession,
+
+    /// Request to exit the application.
+    ///
+    /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
+    /// UI exits only after `ShutdownComplete`. `Immediate` is a last-resort
+    /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
+    /// background tasks, rollout flush, or child process cleanup).
+    Exit(ExitMode),
+
+    /// Request app-server account logout, then exit after it succeeds.
+    Logout,
+
+    /// Request to exit the application due to a fatal error.
+    #[allow(dead_code)]
+    FatalExitRequest(String),
+
+    /// Forward a command to the Agent. Using an `AppEvent` for this avoids
+    /// bubbling channels through layers of widgets.
+    ForallOp(AppCommand),
+
+    /// Restore an output-free interrupted turn into the composer and roll it back.
+    RestoreCancelledTurn(UserMessage),
+
+    /// Approve one retry of a recent auto-review denial selected in the TUI.
+    ApproveRecentAutoReviewDenial {
+        thread_id: ThreadId,
+        id: String,
+    },
+
+    /// Kick off an asynchronous file search for the given query (text after
+    /// the `@`). Previous searches may be cancelled by the app layer so there
+    /// is at most one in-flight search.
+    StartFileSearch(String),
+
+    /// Result of a completed asynchronous file search. The `query` echoes the
+    /// original search term so the UI can decide whether the results are
+    /// still relevant.
+    FileSearchResult {
+        query: String,
+        matches: Vec<FileMatch>,
+    },
+
+    /// Open the current thread goal summary/action menu.
+    OpenThreadGoalMenu {
+        thread_id: ThreadId,
+    },
+
+    /// Open an editor for the current thread goal objective.
+    OpenThreadGoalEditor {
+        thread_id: Option<ThreadId>,
+    },
+
+    /// Materialize and set or replace the current thread goal objective.
+    SetThreadGoalDraft {
+        thread_id: ThreadId,
+        draft: GoalDraft,
+        mode: ThreadGoalSetMode,
+    },
+
+    /// Pause or resume the current thread goal.
+    SetThreadGoalStatus {
+        thread_id: ThreadId,
+        status: ThreadGoalStatus,
+    },
+
+    /// Clear the current thread goal.
+    ClearThreadGoal {
+        thread_id: ThreadId,
+    },
+
+    /// Result of computing a `/diff` command.
+    DiffResult(String),
+
+    /// Open the provided URL in the user's browser.
+    OpenUrlInBrowser {
+        url: String,
+    },
+
+    /// Fetch plugin marketplace state for the provided working directory.
+    FetchPluginsList {
+        cwd: PathBuf,
+    },
+
+    /// Fetch lifecycle hook inventory for the provided working directory.
+    FetchHooksList {
+        cwd: PathBuf,
+    },
+
+    /// Result of fetching plugin marketplace state.
+    PluginsLoaded {
+        cwd: PathBuf,
+        result: Result<PluginListResponse, String>,
+    },
+
+    /// Open the plugin list from an already cached response.
+    OpenPluginsList {
+        cwd: PathBuf,
+        response: PluginListResponse,
+    },
+
+    /// Result of explicitly fetching remote-backed plugin sections.
+    PluginRemoteSectionsLoaded {
+        cwd: PathBuf,
+        marketplaces: Vec<PluginMarketplaceEntry>,
+        section_errors: Vec<PluginRemoteSectionError>,
+    },
+
+    /// Result of fetching lifecycle hook inventory.
+    HooksLoaded {
+        cwd: PathBuf,
+        result: Result<forall_app_server_protocol::HooksListResponse, String>,
+    },
+
+    /// Open the prompt for adding a marketplace source.
+    OpenMarketplaceAddPrompt,
+
+    /// Replace the plugins popup with a marketplace-add loading state.
+    OpenMarketplaceAddLoading {
+        source: String,
+    },
+
+    /// Add a marketplace from the provided source.
+    FetchMarketplaceAdd {
+        cwd: PathBuf,
+        source: String,
+    },
+
+    /// Result of adding a marketplace.
+    MarketplaceAddLoaded {
+        cwd: PathBuf,
+        source: String,
+        result: Result<MarketplaceAddResponse, String>,
+    },
+
+    /// Open the confirmation prompt for removing a marketplace.
+    OpenMarketplaceRemoveConfirm {
+        marketplace_name: String,
+        marketplace_display_name: String,
+    },
+
+    /// Replace the plugins popup with a marketplace-remove loading state.
+    OpenMarketplaceRemoveLoading {
+        marketplace_display_name: String,
+    },
+
+    /// Remove a marketplace by name.
+    FetchMarketplaceRemove {
+        cwd: PathBuf,
+        marketplace_name: String,
+        marketplace_display_name: String,
+    },
+
+    /// Result of removing a marketplace.
+    MarketplaceRemoveLoaded {
+        cwd: PathBuf,
+        marketplace_name: String,
+        marketplace_display_name: String,
+        result: Result<MarketplaceRemoveResponse, String>,
+    },
+
+    /// Replace the plugins popup with a marketplace-upgrade loading state.
+    OpenMarketplaceUpgradeLoading {
+        marketplace_name: Option<String>,
+    },
+
+    /// Upgrade configured Git marketplaces.
+    FetchMarketplaceUpgrade {
+        cwd: PathBuf,
+        marketplace_name: Option<String>,
+    },
+
+    /// Result of upgrading configured Git marketplaces.
+    MarketplaceUpgradeLoaded {
+        cwd: PathBuf,
+        result: Result<MarketplaceUpgradeResponse, String>,
+    },
+
+    /// Replace the plugins popup with a plugin-detail loading state.
+    OpenPluginDetailLoading {
+        plugin_display_name: String,
+    },
+
+    /// Fetch detail for a specific plugin from a marketplace.
+    FetchPluginDetail {
+        cwd: PathBuf,
+        params: PluginReadParams,
+    },
+
+    /// Result of fetching plugin detail.
+    PluginDetailLoaded {
+        cwd: PathBuf,
+        result: Result<PluginReadResponse, String>,
+    },
+
+    /// Replace the plugins popup with an install loading state.
+    OpenPluginInstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Replace the plugins popup with an uninstall loading state.
+    OpenPluginUninstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Install a specific plugin from a marketplace.
+    FetchPluginInstall {
+        cwd: PathBuf,
+        location: PluginLocation,
+        plugin_name: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of installing a plugin.
+    PluginInstallLoaded {
+        cwd: PathBuf,
+        location: PluginLocation,
+        plugin_name: String,
+        plugin_display_name: String,
+        result: Result<PluginInstallResponse, String>,
+    },
+
+    /// Uninstall a specific plugin by canonical plugin id.
+    FetchPluginUninstall {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of uninstalling a plugin.
+    PluginUninstallLoaded {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+        result: Result<PluginUninstallResponse, String>,
+    },
+
+    /// Enable or disable an installed plugin.
+    SetPluginEnabled {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    },
+
+    /// Result of enabling or disabling a plugin.
+    PluginEnabledSet {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+        result: Result<(), String>,
+    },
+
+    /// Refresh plugin mention bindings from the current config.
+    RefreshPluginMentions,
+
+    /// Result of refreshing plugin mention bindings.
+    PluginMentionsLoaded {
+        plugins: Option<Vec<PluginCapabilitySummary>>,
+    },
+
+    /// Fetch MCP inventory via app-server RPCs and render it into history.
+    FetchMcpInventory {
+        detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
+    },
+
+    /// Result of fetching MCP inventory via app-server RPCs.
+    McpInventoryLoaded {
+        result: Result<Vec<McpServerStatus>, String>,
+        detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
+    },
+
+    /// Result of the startup skills refresh that runs after the first frame is scheduled.
+    ///
+    /// This event is startup-only. Interactive skills refreshes are handled synchronously through the app
+    /// command path because those callers expect the visible skill state to be current when their command
+    /// completes.
+    SkillsListLoaded {
+        result: Result<SkillsListResponse, String>,
+    },
+
+    /// Begin buffering initial resume replay rows before they are written to scrollback.
+    BeginInitialHistoryReplayBuffer,
+
+    /// Begin buffering thread-switch replay cells so the final scrollback write can reuse the
+    /// resize-reflow tail renderer.
+    BeginThreadSwitchHistoryReplayBuffer,
+
+    InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Finish buffering initial resume replay after all replay events have been queued.
+    EndInitialHistoryReplayBuffer,
+
+    /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
+    /// the transcript with a single `AgentMarkdownCell` that stores the raw
+    /// markdown source and re-renders from it on resize.
+    ///
+    /// Emitted by `ChatWidget::flush_answer_stream_with_separator` after stream
+    /// finalization. The `App` handler walks backward through `transcript_cells`
+    /// to find the `AgentMessageCell` run and splices in the consolidated cell.
+    /// The `cwd` keeps local file-link display stable across the final re-render.
+    /// `scrollback_reflow` lets table-tail finalization force the already-emitted
+    /// terminal scrollback to be rebuilt from the consolidated source-backed cell.
+    /// `deferred_history_cell` lets callers add the final stream tail to the
+    /// transcript without first writing its provisional render to scrollback.
+    ConsolidateAgentMessage {
+        source: String,
+        cwd: PathBuf,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+        deferred_history_cell: Option<Box<dyn HistoryCell>>,
+    },
+
+    /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
+    /// end of the transcript with a single source-backed `ProposedPlanCell`.
+    ///
+    /// Emitted by `ChatWidget::on_plan_item_completed` after plan stream
+    /// finalization.
+    ConsolidateProposedPlan(String),
+
+    /// Apply rollback semantics to local transcript cells.
+    ///
+    /// This is emitted when rollback was not initiated by the current
+    /// backtrack flow so trimming occurs in AppEvent queue order relative to
+    /// inserted history cells.
+    ApplyThreadRollback {
+        num_turns: u32,
+    },
+
+    StartCommitAnimation,
+    StopCommitAnimation,
+    CommitTick,
+
+    /// Update the current reasoning effort in the running app and widget.
+    UpdateReasoningEffort(Option<ReasoningEffort>),
+
+    /// Update the current model slug in the running app and widget.
+    UpdateModel(String),
+
+    /// Finish a settings selection after its preceding update events have been applied.
+    SettingsSelectionClosed,
+    /// Run after any nested settings events emitted while handling the close event.
+    SettingsSelectionSettled,
+
+    /// Persist the selected model and reasoning effort to the appropriate config.
+    PersistModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Persist the selected service tier to the appropriate config.
+    PersistServiceTierSelection {
+        service_tier: Option<String>,
+    },
+
+    /// Open the reasoning selection popup after picking a model.
+    OpenReasoningPopup {
+        model: ModelPreset,
+    },
+
+    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
+    OpenPlanReasoningScopePrompt {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Open the full model picker (non-auto models).
+    OpenAllModelsPopup {
+        models: Vec<ModelPreset>,
+    },
+
+    /// Open the confirmation prompt before enabling full access mode.
+    OpenFullAccessConfirmation {
+        preset: ApprovalPreset,
+        return_to_permissions: bool,
+        profile_selection: Option<PermissionProfileSelection>,
+    },
+
+    /// Open the Windows world-writable directories warning.
+    /// If `preset` is `Some`, the confirmation will apply the provided
+    /// approval/sandbox configuration on Continue; if `None`, it performs no
+    /// policy change and only acknowledges/dismisses the warning.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    OpenWorldWritableWarningConfirmation {
+        preset: Option<ApprovalPreset>,
+        profile_selection: Option<PermissionProfileSelection>,
+        /// Up to 3 sample world-writable directories to display in the warning.
+        sample_paths: Vec<String>,
+        /// If there are more than `sample_paths`, this carries the remaining count.
+        extra_count: usize,
+        /// True when the scan failed (e.g. ACL query error) and protections could not be verified.
+        failed_scan: bool,
+    },
+
+    /// Prompt to enable the Windows sandbox feature before using Agent mode.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    OpenWindowsSandboxEnablePrompt {
+        preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
+    },
+
+    /// Open the Windows sandbox fallback prompt after declining or failing elevation.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    OpenWindowsSandboxFallbackPrompt {
+        preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
+    },
+
+    /// Begin the elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxElevatedSetup {
+        preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
+    },
+
+    /// Begin the non-elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxLegacySetup {
+        preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
+    },
+
+    /// Begin a non-elevated grant of read access for an additional directory.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxGrantReadRoot {
+        path: String,
+    },
+
+    /// Result of attempting to grant read access for an additional directory.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxGrantReadRootCompleted {
+        path: PathBuf,
+        error: Option<String>,
+    },
+
+    /// Enable the Windows sandbox feature and switch to Agent mode.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    EnableWindowsSandboxForAgentMode {
+        preset: ApprovalPreset,
+        mode: WindowsSandboxEnableMode,
+        profile_selection: Option<PermissionProfileSelection>,
+    },
+
+    /// Update the Windows sandbox feature mode without changing approval presets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
+    /// Update the current approval policy in the running app and widget.
+    UpdateAskForApprovalPolicy(AskForApproval),
+
+    /// Update the current built-in active permission profile in the running app and widget.
+    UpdateActivePermissionProfile(ActivePermissionProfile),
+
+    /// Select a named permission profile, optionally applying built-in mode settings too.
+    SelectPermissionProfile(PermissionProfileSelection),
+
+    /// Update the current approvals reviewer in the running app and widget.
+    UpdateApprovalsReviewer(ApprovalsReviewer),
+
+    /// Update feature flags and persist them to the top-level config.
+    UpdateFeatureFlags {
+        updates: Vec<(Feature, bool)>,
+    },
+
+    /// Update memory settings and persist them to config.toml.
+    UpdateMemorySettings {
+        use_memories: bool,
+        generate_memories: bool,
+    },
+
+    /// Clear all persisted local memory artifacts via the app-server.
+    ResetMemories,
+
+    /// Update whether the full access warning prompt has been acknowledged.
+    UpdateFullAccessWarningAcknowledged(bool),
+
+    /// Update whether the world-writable directories warning has been acknowledged.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    UpdateWorldWritableWarningAcknowledged(bool),
+
+    /// Update the Plan-mode-specific reasoning effort in memory.
+    UpdatePlanModeReasoningEffort(Option<ReasoningEffort>),
+
+    /// Persist the acknowledgement flag for the full access warning prompt.
+    PersistFullAccessWarningAcknowledged,
+
+    /// Persist the acknowledgement flag for the world-writable directories warning.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    PersistWorldWritableWarningAcknowledged,
+
+    /// Persist the Plan-mode-specific reasoning effort.
+    PersistPlanModeReasoningEffort(Option<ReasoningEffort>),
+
+    /// Persist the acknowledgement flag for the model migration prompt.
+    PersistModelMigrationPromptAcknowledged {
+        from_model: String,
+        to_model: String,
+    },
+
+    /// Skip the next world-writable scan (one-shot) after a user-confirmed continue.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    SkipNextWorldWritableScan,
+
+    /// Re-open the approval presets popup.
+    OpenApprovalsPopup,
+
+    /// Open the skills list popup.
+    OpenSkillsList,
+
+    /// Open the skills enable/disable picker.
+    OpenManageSkillsPopup,
+
+    /// Enable or disable a skill by path.
+    SetSkillEnabled {
+        path: AbsolutePathBuf,
+        enabled: bool,
+    },
+
+    /// Enable or disable a hook by stable hook key.
+    SetHookEnabled {
+        key: String,
+        enabled: bool,
+    },
+
+    /// Trust the current definition for a hook by stable hook key.
+    TrustHook {
+        key: String,
+        current_hash: String,
+    },
+
+    /// Trust the current definitions for one or more hooks by stable hook key.
+    TrustHooks {
+        updates: Vec<crate::hooks_rpc::HookTrustUpdate>,
+    },
+
+    /// Result of persisting hook enabled state.
+    HookEnabledSet {
+        key: String,
+        enabled: bool,
+        result: Result<(), String>,
+    },
+
+    /// Result of persisting hook trust state.
+    HookTrusted {
+        result: Result<(), String>,
+    },
+
+    /// Notify that the manage skills popup was closed.
+    ManageSkillsClosed,
+
+    /// Re-open the permissions presets popup.
+    OpenPermissionsPopup,
+
+    /// Open the branch picker option from the review popup.
+    OpenReviewBranchPicker(PathBuf),
+
+    /// Open the commit picker option from the review popup.
+    OpenReviewCommitPicker(PathBuf),
+
+    /// Open the custom prompt option from the review popup.
+    OpenReviewCustomPrompt,
+
+    /// Submit a user message with an explicit collaboration mask.
+    SubmitUserMessageWithMode {
+        text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
+
+    /// Open the approval popup.
+    FullScreenApprovalRequest(ApprovalRequest),
+
+    /// Open the feedback note entry overlay after the user selects a category.
+    OpenFeedbackNote {
+        category: FeedbackCategory,
+        include_logs: bool,
+    },
+
+    /// Open the upload consent popup for feedback after selecting a category.
+    OpenFeedbackConsent {
+        category: FeedbackCategory,
+    },
+
+    /// Submit feedback for the current thread via the app-server feedback RPC.
+    SubmitFeedback {
+        category: FeedbackCategory,
+        reason: Option<String>,
+        turn_id: Option<String>,
+        include_logs: bool,
+    },
+
+    /// Result of a feedback upload request initiated by the TUI.
+    FeedbackSubmitted {
+        origin_thread_id: Option<ThreadId>,
+        category: FeedbackCategory,
+        include_logs: bool,
+        result: Result<String, String>,
+    },
+
+    /// Launch the external editor after a normal draw has completed.
+    LaunchExternalEditor,
+
+    /// Async update of the current git branch for status line rendering.
+    StatusLineBranchUpdated {
+        cwd: PathBuf,
+        branch: Option<String>,
+    },
+    /// Async update of Git summary fields for status line rendering.
+    StatusLineGitSummaryUpdated {
+        cwd: PathBuf,
+        summary: crate::chatwidget::StatusLineGitSummary,
+    },
+    /// Apply a user-confirmed status-line item ordering/selection.
+    StatusLineSetup {
+        items: Vec<StatusLineItem>,
+        use_theme_colors: bool,
+    },
+    /// Dismiss the status-line setup UI without changing config.
+    StatusLineSetupCancelled,
+
+    /// Apply a user-confirmed terminal-title item ordering/selection.
+    TerminalTitleSetup {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Apply a temporary terminal-title preview while the setup UI is open.
+    TerminalTitleSetupPreview {
+        items: Vec<TerminalTitleItem>,
+    },
+    /// Dismiss the terminal-title setup UI without changing config.
+    TerminalTitleSetupCancelled,
+
+    /// Apply a user-confirmed syntax theme selection.
+    SyntaxThemeSelected {
+        name: String,
+    },
+
+    /// Runtime syntax theme preview changed; refresh theme-derived UI colors.
+    SyntaxThemePreviewed,
+
+    /// Open set/remove actions for the selected keymap action.
+    OpenKeymapActionMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open binding selection before replacing one binding for an action.
+    OpenKeymapReplaceBindingMenu {
+        context: String,
+        action: String,
+    },
+
+    /// Open key capture for the selected keymap action.
+    OpenKeymapCapture {
+        context: String,
+        action: String,
+        intent: KeymapEditIntent,
+    },
+
+    /// Open the keymap keypress inspector.
+    OpenKeymapDebug,
+
+    /// Apply a captured key to the selected keymap action.
+    KeymapCaptured {
+        context: String,
+        action: String,
+        key: String,
+        intent: KeymapEditIntent,
+    },
+
+    /// Remove the custom root binding for the selected keymap action.
+    KeymapCleared {
+        context: String,
+        action: String,
+    },
+}
+
+/// Named profile selection to apply after any required UI guardrails complete.
+#[derive(Debug, Clone)]
+pub(crate) struct PermissionProfileSelection {
+    pub profile_id: String,
+    pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub display_label: String,
+}
+
+/// The exit strategy requested by the UI layer.
+///
+/// Most user-initiated exits should use `ShutdownFirst` so core cleanup runs and the UI exits only
+/// after core acknowledges completion. `Immediate` is an escape hatch for cases where shutdown has
+/// already completed (or is being bypassed) and the UI loop should terminate right away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitMode {
+    /// Shutdown core and exit after completion.
+    ShutdownFirst,
+    /// Exit the UI loop immediately without waiting for shutdown.
+    ///
+    /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
+    /// cleanup that normally runs before `ShutdownComplete` can be missed.
+    Immediate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeedbackCategory {
+    BadResult,
+    GoodResult,
+    Bug,
+    SafetyCheck,
+    Other,
+}
