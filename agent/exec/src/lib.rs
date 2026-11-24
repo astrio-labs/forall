@@ -695,11 +695,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_effort = config.model_reasoning_effort.clone();
 
-    let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
+    let initial_operation = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = forall_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
+            InitialOperation::Review { review_request }
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
@@ -720,18 +719,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
             items.push(UserInput::Text {
-                text: prompt_text.clone(),
+                text: prompt_text,
                 // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path.clone());
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
+            InitialOperation::UserTurn {
+                items,
+                output_schema,
+            }
         }
         (None, root_prompt, imgs) => {
             let prompt_text = resolve_root_prompt(root_prompt);
@@ -740,18 +736,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
             items.push(UserInput::Text {
-                text: prompt_text.clone(),
+                text: prompt_text,
                 // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path);
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
-                prompt_text,
-            )
+            InitialOperation::UserTurn {
+                items,
+                output_schema,
+            }
         }
     };
 
@@ -834,9 +827,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     exec_span.record("thread.id", primary_thread_id_for_span.as_str());
 
-    // Print the effective configuration and initial request so users can see what Forall
-    // is using.
-    event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
+    event_processor.print_config_summary(&config, &session_configured);
     if !json_mode
         && let Some(message) =
             forall_core::config::system_bwrap_warning(config.permissions.permission_profile())

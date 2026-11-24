@@ -594,12 +594,7 @@ impl EventProcessorWithJsonOutput {
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
-    fn print_config_summary(
-        &mut self,
-        _: &Config,
-        _: &str,
-        session_configured: &SessionConfiguredEvent,
-    ) {
+    fn print_config_summary(&mut self, _: &Config, session_configured: &SessionConfiguredEvent) {
         self.emit(Self::thread_started_event(session_configured));
     }
 

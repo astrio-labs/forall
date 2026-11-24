@@ -211,7 +211,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     fn print_config_summary(
         &mut self,
         config: &Config,
-        prompt: &str,
         session_configured_event: &SessionConfiguredEvent,
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -220,9 +219,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
         eprintln!("--------");
-        if std::io::stderr().is_terminal() {
-            eprintln!("{}\n{}", "user".style(self.cyan), prompt);
-        }
     }
 
     fn process_server_notification(&mut self, notification: ServerNotification) -> ForallStatus {

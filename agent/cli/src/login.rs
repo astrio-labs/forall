@@ -20,7 +20,6 @@ use forall_login::VerificationApiKeyStore;
 use forall_login::logout_with_revoke;
 use forall_login::revoke_stored_oauth_tokens_best_effort;
 use forall_login::set_openai_api_key;
-use forall_protocol::account::PlanType;
 use forall_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
@@ -152,6 +151,8 @@ pub async fn run_git_credential_github(
     std::process::exit(0);
 }
 
+const OAUTH_LOGIN_STATUS: &str = "Logged in with your Forall account";
+
 pub async fn run_login_default(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
@@ -178,11 +179,8 @@ pub async fn run_login_default(cli_config_overrides: CliConfigOverrides) -> ! {
     eprintln!("  {}", started.auth_url);
 
     match started.completion.await {
-        Ok(Ok(outcome)) => {
-            let email = outcome.tokens.id_token.email.clone();
-            let plan =
-                ForallAuth::Oauth(forall_login::OauthAuth::new(outcome.tokens)).account_plan_type();
-            print_oauth_status(email.as_deref(), plan);
+        Ok(Ok(_)) => {
+            eprintln!("{OAUTH_LOGIN_STATUS}");
             std::process::exit(0);
         }
         Ok(Err(err)) => {
@@ -193,42 +191,6 @@ pub async fn run_login_default(cli_config_overrides: CliConfigOverrides) -> ! {
             eprintln!("Login failed: the login flow terminated unexpectedly");
             std::process::exit(1);
         }
-    }
-}
-
-fn print_oauth_status(email: Option<&str>, plan: Option<PlanType>) {
-    if std::io::stderr().is_terminal() {
-        eprintln!("{}", oauth_status_line(email, plan));
-    } else {
-        eprintln!("Logged in with your Forall account");
-    }
-}
-
-/// User-facing status line for a Forall OAuth login.
-fn oauth_status_line(email: Option<&str>, plan: Option<PlanType>) -> String {
-    let plan = plan.map(plan_display_name);
-    match (email, plan) {
-        (Some(email), Some(plan)) => {
-            format!("Logged in with your Forall account ({email}, {plan})")
-        }
-        (Some(email), None) => format!("Logged in with your Forall account ({email})"),
-        (None, Some(plan)) => format!("Logged in with your Forall account ({plan})"),
-        (None, None) => "Logged in with your Forall account".to_string(),
-    }
-}
-
-fn plan_display_name(plan: PlanType) -> &'static str {
-    match plan {
-        PlanType::Free => "Free",
-        PlanType::Go => "Go",
-        PlanType::Plus => "Plus",
-        PlanType::Pro => "Pro",
-        PlanType::ProLite => "Pro Lite",
-        PlanType::Team => "Team",
-        PlanType::SelfServeBusinessUsageBased | PlanType::Business => "Business",
-        PlanType::EnterpriseCbpUsageBased | PlanType::Enterprise => "Enterprise",
-        PlanType::Edu => "Edu",
-        PlanType::Unknown => "Unknown",
     }
 }
 
@@ -390,8 +352,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 std::process::exit(0);
             }
             AuthMode::Oauth => {
-                let email = auth.get_account_email();
-                print_oauth_status(email.as_deref(), auth.account_plan_type());
+                eprintln!("{OAUTH_LOGIN_STATUS}");
                 std::process::exit(0);
             }
         },
@@ -470,8 +431,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::clear_existing_auth_before_login;
-    use super::oauth_status_line;
-    use forall_protocol::account::PlanType;
 
     #[tokio::test]
     async fn clears_existing_auth_before_login() {
@@ -499,25 +458,5 @@ mod tests {
         )
         .expect("load auth after cleanup");
         assert_eq!(auth, None);
-    }
-
-    #[test]
-    fn oauth_status_line_includes_email_and_plan() {
-        assert_eq!(
-            oauth_status_line(Some("user@example.com"), Some(PlanType::Pro)),
-            "Logged in with your Forall account (user@example.com, Pro)"
-        );
-        assert_eq!(
-            oauth_status_line(Some("user@example.com"), None),
-            "Logged in with your Forall account (user@example.com)"
-        );
-        assert_eq!(
-            oauth_status_line(None, Some(PlanType::Free)),
-            "Logged in with your Forall account (Free)"
-        );
-        assert_eq!(
-            oauth_status_line(None, None),
-            "Logged in with your Forall account"
-        );
     }
 }

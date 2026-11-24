@@ -11,11 +11,10 @@ pub enum ForallStatus {
 }
 
 pub(crate) trait EventProcessor {
-    /// Print summary of effective configuration and user prompt.
+    /// Print the effective session configuration.
     fn print_config_summary(
         &mut self,
         config: &Config,
-        prompt: &str,
         session_configured: &SessionConfiguredEvent,
     );
 
