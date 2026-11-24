@@ -1,14 +1,16 @@
-# Forall
+<p align="center">
+<strong>Forall (∀)</strong> is Astrio’s coding agent for building provably correct software.
+</p>
+
+<div align="center">
+  <img alt="Forall CLI" src="assets/forall-cli.png" width="800" />
+</div>
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square" /></a>
   <a href="https://discord.com/invite/gESuZkdD5R"><img alt="Discord" src="https://img.shields.io/badge/Discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
   <a href="https://x.com/astriolabs"><img src="https://img.shields.io/badge/Follow%20on%20X-222021?logo=x&logoColor=white" alt="Follow on X"></a>
 </p>
-
-<div align="center">
-  <img alt="Forall CLI" src="assets/forall-cli.png" width="800" />
-</div>
 
 ## Why Forall exists
 
