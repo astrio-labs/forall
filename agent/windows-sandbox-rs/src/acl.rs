@@ -125,7 +125,7 @@ pub unsafe fn dacl_mask_allows(
     };
     for i in 0..(info.AceCount as usize) {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
+        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 || p_ace.is_null() {
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
@@ -194,7 +194,7 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
     let count = info.AceCount as usize;
     for i in 0..count {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
+        if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 || p_ace.is_null() {
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
@@ -242,7 +242,7 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
         | FILE_DELETE_CHILD;
     for i in 0..info.AceCount {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
+        if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 || p_ace.is_null() {
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
@@ -280,7 +280,7 @@ pub unsafe fn dacl_has_read_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) ->
     let deny_read_mask = FILE_GENERIC_READ | GENERIC_READ_MASK;
     for i in 0..info.AceCount {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
-        if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
+        if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 || p_ace.is_null() {
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
