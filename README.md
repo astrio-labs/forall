@@ -113,12 +113,3 @@ Join our [Discord](https://discord.com/invite/gESuZkdD5R) and [X](https://x.com/
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-
-Forall includes a modified version of the OpenAI Codex agent runtime.
-
-OpenAI Codex
-Copyright 2025 OpenAI
-
-This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
-Copyright (c) 2016-2022 Florian Dehau
-Copyright (c) 2023-2025 The Ratatui Developers
