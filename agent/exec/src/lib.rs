@@ -158,7 +158,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
 
-const DEFAULT_METRICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
 
 enum InitialOperation {
@@ -474,35 +473,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         std::process::exit(1);
     }
 
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        forall_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            DEFAULT_METRICS_ENABLED,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            eprintln!("Could not create otel exporter: {e}");
-            None
-        }
-        Err(_) => {
-            eprintln!("Could not create otel exporter: panicked during initialization");
-            None
-        }
-    };
-    forall_core::otel_init::record_process_start(otel.as_ref(), "forall_exec");
-    forall_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "forall_exec");
-
-    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-
-    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
-
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
-        .with(otel_tracing_layer)
-        .with(otel_logger_layer)
+        .with(tracing_subscriber::filter::filter_fn(
+            forall_core::util::local_log_metadata,
+        ))
         .try_init();
 
     let exec_span = exec_root_span();

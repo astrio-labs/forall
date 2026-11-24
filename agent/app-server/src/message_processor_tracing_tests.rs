@@ -1,7 +1,6 @@
 use super::ConnectionSessionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
-use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -9,6 +8,7 @@ use crate::transport::AppServerTransport;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
+use forall_analytics::AnalyticsEventsClient;
 use forall_analytics::AppServerRpcTransport;
 use forall_app_server_protocol::ClientInfo;
 use forall_app_server_protocol::ClientRequest;
@@ -28,7 +28,6 @@ use forall_config::LoaderOverrides;
 use forall_core::config::Config;
 use forall_core::config::ConfigBuilder;
 use forall_exec_server::EnvironmentManager;
-use forall_feedback::ForallFeedback;
 use forall_login::AuthManager;
 use forall_protocol::protocol::SessionSource;
 use forall_protocol::protocol::W3cTraceContext;
@@ -244,8 +243,7 @@ async fn build_test_processor(
         Arg0DispatchPaths::default(),
         Arc::new(forall_config::NoopThreadConfigLoader),
     );
-    let analytics_events_client =
-        analytics_events_client_from_config(Arc::clone(&auth_manager), config.as_ref());
+    let analytics_events_client = AnalyticsEventsClient::disabled();
     let outgoing = Arc::new(OutgoingMessageSender::new(
         outgoing_tx,
         analytics_events_client.clone(),
@@ -257,13 +255,11 @@ async fn build_test_processor(
         config,
         config_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-        feedback: ForallFeedback::new(),
         log_db: None,
         state_db: None,
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         auth_manager,
-        installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         rpc_transport: AppServerRpcTransport::Stdio,
         plugin_startup_tasks: crate::PluginStartupTasks::Start,
     }));

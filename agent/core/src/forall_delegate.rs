@@ -87,7 +87,6 @@ pub(crate) async fn run_forall_thread_interactive(
     let ForallSpawnOk { forall, .. } = Box::pin(Forall::spawn(ForallSpawnArgs {
         config,
         user_instructions,
-        installation_id: parent_session.installation_id.clone(),
         auth_manager,
         models_manager,
         environment_manager: parent_session

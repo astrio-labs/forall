@@ -1,15 +1,3 @@
-use crate::events::AppServerRpcTransport;
-use crate::events::ForallRuntimeMetadata;
-use crate::events::GuardianReviewEventParams;
-use forall_app_server_protocol::ClientRequest;
-use forall_app_server_protocol::ClientResponsePayload;
-use forall_app_server_protocol::InitializeParams;
-use forall_app_server_protocol::JSONRPCErrorError;
-use forall_app_server_protocol::RequestId;
-use forall_app_server_protocol::ServerNotification;
-use forall_app_server_protocol::ServerRequest;
-use forall_app_server_protocol::ServerResponse;
-use forall_plugin::PluginTelemetryMetadata;
 use forall_protocol::config_types::ApprovalsReviewer;
 use forall_protocol::config_types::ModeKind;
 use forall_protocol::config_types::Personality;
@@ -26,7 +14,6 @@ use forall_protocol::protocol::SessionSource;
 use forall_protocol::protocol::SkillScope;
 use forall_protocol::protocol::SubAgentSource;
 use forall_protocol::protocol::TokenUsage;
-use forall_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -441,115 +428,10 @@ pub struct ForallGoalEvent {
     pub cumulative_time_accounted_seconds: Option<i64>,
 }
 
-#[allow(dead_code)]
-pub(crate) enum AnalyticsFact {
-    Initialize {
-        connection_id: u64,
-        params: InitializeParams,
-        product_client_id: String,
-        runtime: ForallRuntimeMetadata,
-        rpc_transport: AppServerRpcTransport,
-    },
-    ClientRequest {
-        connection_id: u64,
-        request_id: RequestId,
-        request: Box<ClientRequest>,
-    },
-    ClientResponse {
-        connection_id: u64,
-        request_id: RequestId,
-        response: Box<ClientResponsePayload>,
-    },
-    ErrorResponse {
-        connection_id: u64,
-        request_id: RequestId,
-        error: JSONRPCErrorError,
-        error_type: Option<AnalyticsJsonRpcError>,
-    },
-    ServerRequest {
-        connection_id: u64,
-        request: Box<ServerRequest>,
-    },
-    ServerResponse {
-        completed_at_ms: u64,
-        response: Box<ServerResponse>,
-    },
-    EffectivePermissionsApprovalResponse {
-        completed_at_ms: u64,
-        request_id: RequestId,
-        response: Box<RequestPermissionsResponse>,
-    },
-    ServerRequestAborted {
-        completed_at_ms: u64,
-        request_id: RequestId,
-    },
-    Notification(Box<ServerNotification>),
-    // Facts that do not naturally exist on the app-server protocol surface, or
-    // would require non-trivial protocol reshaping on this branch.
-    Custom(CustomAnalyticsFact),
-}
-
-pub(crate) enum CustomAnalyticsFact {
-    SubAgentThreadStarted(SubAgentThreadStartedInput),
-    Compaction(Box<ForallCompactionEvent>),
-    Goal(Box<ForallGoalEvent>),
-    GuardianReview(Box<GuardianReviewEventParams>),
-    TurnResolvedConfig(Box<TurnResolvedConfigFact>),
-    TurnTokenUsage(Box<TurnTokenUsageFact>),
-    TurnProfile(Box<TurnProfileFact>),
-    TurnForallError(Box<TurnForallErrorFact>),
-    SkillInvoked(SkillInvokedInput),
-    AppMentioned(AppMentionedInput),
-    AppUsed(AppUsedInput),
-    HookRun(HookRunInput),
-    PluginUsed(PluginUsedInput),
-    PluginStateChanged(PluginStateChangedInput),
-    PluginInstallFailed(PluginInstallFailedInput),
-    ExternalAgentConfigImportCompleted(ExternalAgentConfigImportCompletedInput),
-    ExternalAgentConfigImportFailure(ExternalAgentConfigImportFailureInput),
-    ForallCheckCompleted(ForallCheckCompletedInput),
-    VerifiedGateBlocked(VerifiedGateBlockedInput),
-}
-
-pub(crate) struct SkillInvokedInput {
-    pub tracking: TrackEventsContext,
-    pub invocations: Vec<SkillInvocation>,
-}
-
-pub(crate) struct AppMentionedInput {
-    pub tracking: TrackEventsContext,
-    pub mentions: Vec<AppInvocation>,
-}
-
-pub(crate) struct AppUsedInput {
-    pub tracking: TrackEventsContext,
-    pub app: AppInvocation,
-}
-
-pub(crate) struct HookRunInput {
-    pub tracking: TrackEventsContext,
-    pub hook: HookRunFact,
-}
-
 pub struct HookRunFact {
     pub event_name: HookEventName,
     pub hook_source: HookSource,
     pub status: HookRunStatus,
-}
-
-pub(crate) struct PluginUsedInput {
-    pub tracking: TrackEventsContext,
-    pub plugin: PluginTelemetryMetadata,
-}
-
-pub(crate) struct PluginStateChangedInput {
-    pub plugin: PluginTelemetryMetadata,
-    pub state: PluginState,
-}
-
-pub(crate) struct PluginInstallFailedInput {
-    pub plugin: PluginTelemetryMetadata,
-    pub error_type: String,
 }
 
 pub struct ExternalAgentConfigImportCompletedInput {
@@ -605,12 +487,4 @@ pub struct VerifiedGateBlockedFact {
     pub active_change: Option<String>,
     pub blocked_by: Option<Vec<String>>,
     pub next_artifact: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum PluginState {
-    Installed,
-    Uninstalled,
-    Enabled,
-    Disabled,
 }

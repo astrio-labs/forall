@@ -1,6 +1,5 @@
 #![allow(clippy::expect_used)]
 
-mod analytics_server;
 mod auth_fixtures;
 mod config;
 mod mock_model_server;
@@ -9,8 +8,6 @@ mod responses;
 mod rollout;
 mod test_app_server;
 
-pub use analytics_server::analytics_events_http_path;
-pub use analytics_server::start_analytics_events_server;
 pub use auth_fixtures::ApiKeyAuthFixture;
 pub use auth_fixtures::LegacyIdTokenClaims;
 pub use auth_fixtures::encode_id_token;

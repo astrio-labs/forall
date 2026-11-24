@@ -118,16 +118,6 @@ impl ForallResponsesRequestKind {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
-pub(crate) struct TurnMetadataWorkspace {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) associated_remote_urls: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) latest_git_commit_hash: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) has_changes: Option<bool>,
-}
-
 /// Caller-owned snapshot of Forall metadata sent to ResponsesAPI.
 ///
 /// The full Forall turn metadata blob is transported canonically as
@@ -136,7 +126,6 @@ pub(crate) struct TurnMetadataWorkspace {
 /// truth.
 #[derive(Clone, Debug)]
 pub struct ForallResponsesMetadata {
-    pub(crate) installation_id: String,
     pub(crate) session_id: String,
     pub(crate) thread_id: String,
     pub(crate) turn_id: Option<String>,
@@ -148,20 +137,13 @@ pub struct ForallResponsesMetadata {
     pub(crate) subagent_kind: Option<String>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) sandbox: Option<String>,
-    pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
     pub(crate) extra: BTreeMap<String, String>,
 }
 
 impl ForallResponsesMetadata {
-    pub(crate) fn new(
-        installation_id: String,
-        session_id: String,
-        thread_id: String,
-        window_id: String,
-    ) -> Self {
+    pub(crate) fn new(session_id: String, thread_id: String, window_id: String) -> Self {
         Self {
-            installation_id,
             session_id,
             thread_id,
             turn_id: None,
@@ -173,7 +155,6 @@ impl ForallResponsesMetadata {
             subagent_kind: None,
             thread_source: None,
             sandbox: None,
-            workspaces: BTreeMap::new(),
             turn_started_at_unix_ms: None,
             extra: BTreeMap::new(),
         }
@@ -193,10 +174,6 @@ impl ForallResponsesMetadata {
 
     pub(crate) fn client_metadata(&self) -> HashMap<String, String> {
         let mut client_metadata = HashMap::from([
-            (
-                X_CODEX_INSTALLATION_ID_HEADER.to_string(),
-                self.installation_id.clone(),
-            ),
             (SESSION_ID_KEY.to_string(), self.session_id.clone()),
             (THREAD_ID_KEY.to_string(), self.thread_id.clone()),
             (X_CODEX_WINDOW_ID_HEADER.to_string(), self.window_id.clone()),
@@ -262,7 +239,6 @@ impl ForallResponsesMetadata {
         let has_request_identity =
             request_kind.is_some_and(ForallResponsesRequestKind::has_turn_identity);
         ForallTurnMetadataPayload {
-            installation_id: has_request_identity.then_some(self.installation_id.as_str()),
             session_id: has_turn_identity.then_some(self.session_id.as_str()),
             thread_id: has_turn_identity.then_some(self.thread_id.as_str()),
             turn_id: has_turn_identity
@@ -275,7 +251,6 @@ impl ForallResponsesMetadata {
             subagent_kind: self.subagent_kind.as_deref(),
             thread_source: self.thread_source.as_ref(),
             sandbox: self.sandbox.as_deref(),
-            workspaces: non_empty_workspaces(&self.workspaces),
             turn_started_at_unix_ms: self.turn_started_at_unix_ms,
             compaction,
             // responsesapi_client_metadata enriches the Forall turn metadata blob, not literal
@@ -333,16 +308,8 @@ pub(crate) fn filter_extra_metadata(extra: HashMap<String, String>) -> BTreeMap<
         .collect()
 }
 
-fn non_empty_workspaces(
-    workspaces: &BTreeMap<String, TurnMetadataWorkspace>,
-) -> Option<&BTreeMap<String, TurnMetadataWorkspace>> {
-    (!workspaces.is_empty()).then_some(workspaces)
-}
-
 #[derive(Serialize)]
 struct ForallTurnMetadataPayload<'a> {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    installation_id: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<&'a str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,8 +330,6 @@ struct ForallTurnMetadataPayload<'a> {
     thread_source: Option<&'a ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox: Option<&'a str>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    workspaces: Option<&'a BTreeMap<String, TurnMetadataWorkspace>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_started_at_unix_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

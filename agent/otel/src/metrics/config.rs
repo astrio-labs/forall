@@ -1,4 +1,3 @@
-use crate::config::OtelExporter;
 use crate::metrics::Result;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
@@ -7,40 +6,17 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
-pub enum MetricsExporter {
-    Otlp(OtelExporter),
-    InMemory(InMemoryMetricExporter),
-}
-
-#[derive(Clone, Debug)]
 pub struct MetricsConfig {
     pub(crate) environment: String,
     pub(crate) service_name: String,
     pub(crate) service_version: String,
-    pub(crate) exporter: MetricsExporter,
+    pub(crate) exporter: InMemoryMetricExporter,
     pub(crate) export_interval: Option<Duration>,
     pub(crate) runtime_reader: bool,
     pub(crate) default_tags: BTreeMap<String, String>,
 }
 
 impl MetricsConfig {
-    pub fn otlp(
-        environment: impl Into<String>,
-        service_name: impl Into<String>,
-        service_version: impl Into<String>,
-        exporter: OtelExporter,
-    ) -> Self {
-        Self {
-            environment: environment.into(),
-            service_name: service_name.into(),
-            service_version: service_version.into(),
-            exporter: MetricsExporter::Otlp(exporter),
-            export_interval: None,
-            runtime_reader: false,
-            default_tags: BTreeMap::new(),
-        }
-    }
-
     /// Create an in-memory config (used in tests).
     pub fn in_memory(
         environment: impl Into<String>,
@@ -52,7 +28,7 @@ impl MetricsConfig {
             environment: environment.into(),
             service_name: service_name.into(),
             service_version: service_version.into(),
-            exporter: MetricsExporter::InMemory(exporter),
+            exporter: exporter,
             export_interval: None,
             runtime_reader: false,
             default_tags: BTreeMap::new(),

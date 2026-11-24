@@ -1,7 +1,6 @@
 use super::*;
 use crate::config::test_config;
 use crate::init_state_db;
-use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
@@ -31,8 +30,6 @@ use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
-
-const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -459,7 +456,6 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -571,7 +567,6 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -675,7 +670,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
 }
 
 #[tokio::test]
-async fn explicit_installation_id_skips_forall_home_file() {
+async fn starting_a_thread_does_not_create_an_installation_id() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
     config.forall_home = temp_dir.path().join("forall-home").abs();
@@ -684,7 +679,6 @@ async fn explicit_installation_id_skips_forall_home_file() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(ForallAuth::create_dummy_api_key_auth_for_testing());
-    let installation_id = uuid::Uuid::new_v4().to_string();
     let state_db = init_state_db(&config).await;
     let thread_store = thread_store_from_config(&config, state_db.clone());
     let manager = ThreadManager::new(
@@ -697,7 +691,6 @@ async fn explicit_installation_id_skips_forall_home_file() {
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
-        installation_id.clone(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -706,13 +699,9 @@ async fn explicit_installation_id_skips_forall_home_file() {
     let thread = manager
         .start_thread(config.clone())
         .await
-        .expect("start thread with explicit installation id");
+        .expect("start thread");
 
-    assert!(!config.forall_home.join(INSTALLATION_ID_FILENAME).exists());
-    assert_eq!(
-        thread.thread.forall.session.installation_id,
-        installation_id
-    );
+    assert!(!config.forall_home.join("installation_id").exists());
 
     thread
         .thread
@@ -742,7 +731,6 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -803,7 +791,6 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -871,7 +858,6 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -967,7 +953,6 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         /*analytics_events_client*/ None,
         thread_store.clone(),
         state_db,
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -1074,7 +1059,6 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -1297,7 +1281,6 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -1407,7 +1390,6 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,
@@ -1507,7 +1489,6 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, state_db.clone()),
         state_db.clone(),
-        TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,

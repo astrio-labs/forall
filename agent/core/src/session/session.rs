@@ -25,7 +25,6 @@ use tokio::sync::Semaphore;
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
-    pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) out_of_band_elicitation_paused: watch::Sender<bool>,
@@ -475,7 +474,6 @@ impl Session {
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         user_instructions: Option<forall_extension_api::UserInstructions>,
-        installation_id: String,
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
@@ -773,11 +771,12 @@ impl Session {
                 account_email.clone(),
                 auth_mode,
                 originator.clone(),
-                config.otel.log_user_prompt,
+                /*log_user_prompt*/ false,
                 terminal_type.clone(),
                 session_configuration.session_source.clone(),
             )
-            .with_auth_env(auth_env_telemetry.to_otel_metadata());
+            .with_local_runtime_metrics(config.features.enabled(Feature::RuntimeMetrics))
+        .with_auth_env(auth_env_telemetry.to_otel_metadata());
             if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
                 session_telemetry = session_telemetry.with_metrics_service_name(service_name);
             }
@@ -976,12 +975,7 @@ impl Session {
                 });
             }
 
-            let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
-                AnalyticsEventsClient::new(
-                    Arc::clone(&auth_manager),
-                    config.analytics_events_client_config(),
-                )
-            });
+            let analytics_events_client = analytics_events_client.unwrap_or_default();
             // Keep one stable manager handle for the session so extension resource clients
             // automatically observe the manager installed at startup and on later refreshes.
             let mcp_connection_manager = Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -1084,7 +1078,6 @@ impl Session {
 
             let sess = Arc::new(Session {
                 thread_id,
-                installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,
                 out_of_band_elicitation_paused,

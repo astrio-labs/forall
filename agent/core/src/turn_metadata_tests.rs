@@ -20,7 +20,6 @@ use forall_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::Command;
 
@@ -37,11 +36,7 @@ fn test_responses_metadata_json(
     request_kind: ForallResponsesRequestKind,
 ) -> String {
     state
-        .to_responses_metadata(
-            "installation-a".to_string(),
-            window_id.to_string(),
-            request_kind,
-        )
+        .to_responses_metadata(window_id.to_string(), request_kind)
         .turn_metadata_json()
         .expect("turn metadata json")
 }
@@ -111,22 +106,17 @@ async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
 
 #[tokio::test]
 async fn detached_memory_responses_metadata_omits_turn_identity() {
-    let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
-
     let header = detached_memory_responses_metadata(
         String::new(),
         String::new(),
         String::new(),
-        String::new(),
         &SessionSource::Unknown,
-        &repo_path,
         Some("none"),
     )
     .await
     .turn_metadata_json()
     .expect("header");
     assert!(header.is_ascii());
-    assert!(!header.contains("東京"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
     assert_eq!(parsed["request_kind"].as_str(), Some("memory"));
     assert!(parsed.get("session_id").is_none());
@@ -135,37 +125,16 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     assert!(parsed.get("turn_id").is_none());
     assert!(parsed.get(WINDOW_ID_KEY).is_none());
 
-    let expected_repo_path = repo_path.to_string_lossy().into_owned();
-    let actual_repo_path = parsed
-        .get("workspaces")
-        .and_then(Value::as_object)
-        .and_then(|workspaces| workspaces.keys().next())
-        .expect("workspace path");
-    assert_eq!(actual_repo_path, &expected_repo_path);
-    let workspace = parsed
-        .get("workspaces")
-        .and_then(Value::as_object)
-        .and_then(|workspaces| workspaces.values().next())
-        .cloned()
-        .expect("workspace");
-    assert_eq!(
-        workspace.get("has_changes").and_then(Value::as_bool),
-        Some(false)
-    );
+    assert!(parsed.get("workspaces").is_none());
 }
 
 #[tokio::test]
 async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().abs();
-
     let header = detached_memory_responses_metadata(
         String::new(),
         String::new(),
         String::new(),
-        String::new(),
         &SessionSource::Unknown,
-        &cwd,
         /*sandbox*/ None,
     )
     .await
@@ -665,10 +634,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         model_request_json["thread_source"].as_str(),
         Some("automation")
     );
-    assert_eq!(
-        model_request_json[INSTALLATION_ID_KEY].as_str(),
-        Some("installation-a")
-    );
+    assert!(model_request_json.get(INSTALLATION_ID_KEY).is_none());
     assert_eq!(
         model_request_json[WINDOW_ID_KEY].as_str(),
         Some("thread-a:1")
@@ -739,7 +705,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
 }
 
 #[tokio::test]
-async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
+async fn turn_metadata_state_preserves_lineage_without_repository_metadata() {
     let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
 
     let permission_profile = PermissionProfile::read_only();
@@ -765,24 +731,8 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
         /*enforce_managed_network*/ false,
     );
 
-    state.spawn_git_enrichment_task();
-
-    let json = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let header = test_turn_metadata_header(&state);
-            let json: Value = serde_json::from_str(&header).expect("json");
-            if json
-                .get("workspaces")
-                .and_then(Value::as_object)
-                .is_some_and(|workspaces| !workspaces.is_empty())
-            {
-                return json;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("git enrichment should complete");
+    let json: Value = serde_json::from_str(&test_turn_metadata_header(&state)).expect("json");
+    assert!(json.get("workspaces").is_none());
 
     assert_eq!(
         json["forked_from_thread_id"].as_str(),

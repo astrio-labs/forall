@@ -30,7 +30,6 @@ use crate::metrics::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 use crate::metrics::timer::Timer;
-use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
@@ -135,6 +134,12 @@ impl SessionTelemetry {
         self
     }
 
+    pub fn with_local_runtime_metrics(mut self, enabled: bool) -> Self {
+        self.metrics = enabled.then(crate::metrics::local_runtime_metrics);
+        self.metrics_use_metadata_tags = false;
+        self
+    }
+
     pub fn with_metrics(mut self, metrics: MetricsClient) -> Self {
         self.metrics = Some(metrics);
         self.metrics_use_metadata_tags = true;
@@ -150,13 +155,6 @@ impl SessionTelemetry {
     pub fn with_metrics_config(self, config: MetricsConfig) -> MetricsResult<Self> {
         let metrics = MetricsClient::new(config)?;
         Ok(self.with_metrics(metrics))
-    }
-
-    pub fn with_provider_metrics(self, provider: &OtelProvider) -> Self {
-        match provider.metrics() {
-            Some(metrics) => self.with_metrics(metrics.clone()),
-            None => self,
-        }
     }
 
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {

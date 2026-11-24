@@ -147,7 +147,6 @@ mod auth_keyring;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
-pub(crate) mod otel;
 mod permission_profile_catalog;
 mod permissions;
 mod resolved_permission_profile;
@@ -1054,25 +1053,8 @@ pub struct Config {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
 
-    /// When `false`, disables analytics across Forall product surfaces in this machine.
-    /// Voluntarily left as Optional because the default value might depend on the client.
-    pub analytics_enabled: Option<bool>,
-
-    /// Product analytics ingest URL. Host-only values get `/v1/analytics/events` appended.
-    pub analytics_endpoint: Option<String>,
-
-    /// Env var name for the telemetry ingest API key. Defaults to `FORALL_ANALYTICS_API_KEY`.
-    pub analytics_api_key_env: Option<String>,
-
-    /// When `false`, disables feedback collection across Forall product surfaces.
-    /// Defaults to `true`.
-    pub feedback_enabled: bool,
-
     /// Configured discoverable tools for tool suggestions.
     pub tool_suggest: ToolSuggestConfig,
-
-    /// OTEL configuration (exporter type, endpoint, headers, etc.).
-    pub otel: forall_config::types::OtelConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -1385,14 +1367,6 @@ impl ConfigBuilder {
 }
 
 impl Config {
-    pub fn analytics_events_client_config(&self) -> forall_analytics::AnalyticsEventsClientConfig {
-        forall_analytics::AnalyticsEventsClientConfig {
-            endpoint: self.analytics_endpoint.clone(),
-            analytics_enabled: self.analytics_enabled,
-            api_key_env: self.analytics_api_key_env.clone(),
-        }
-    }
-
     pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
         if self.features.enabled(Feature::MultiAgentV2) {
             MultiAgentVersion::V2
@@ -3726,7 +3700,6 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
-        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
             service_tier,
@@ -3896,14 +3869,6 @@ impl Config {
             active_project,
             notices,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            analytics_enabled: cfg.analytics.as_ref().and_then(|a| a.enabled),
-            analytics_endpoint: cfg.analytics.as_ref().and_then(|a| a.endpoint.clone()),
-            analytics_api_key_env: cfg.analytics.as_ref().and_then(|a| a.api_key_env.clone()),
-            feedback_enabled: cfg
-                .feedback
-                .as_ref()
-                .and_then(|feedback| feedback.enabled)
-                .unwrap_or(true),
             tool_suggest,
             tui_notifications: cfg
                 .tui
@@ -3957,7 +3922,6 @@ impl Config {
                 .as_ref()
                 .map(|t| t.keymap.clone())
                 .unwrap_or_default(),
-            otel,
         };
         Ok(config)
         })

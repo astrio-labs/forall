@@ -397,12 +397,8 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             .expect("remote compact request should include turn metadata"),
     )
     .expect("remote compact turn metadata should be valid json");
-    assert_eq!(
-        compact_request
-            .header("x-forall-installation-id")
-            .as_deref(),
-        compact_metadata["installation_id"].as_str()
-    );
+    assert!(compact_request.header("x-forall-installation-id").is_none());
+    assert!(compact_metadata.get("installation_id").is_none());
     assert!(
         compact_metadata["turn_id"]
             .as_str()

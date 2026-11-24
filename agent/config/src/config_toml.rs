@@ -7,17 +7,14 @@ use std::path::Path;
 use crate::HooksToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
-use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AuthCredentialsStoreMode;
-use crate::types::FeedbackConfigToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
-use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
@@ -436,20 +433,24 @@ pub struct ConfigToml {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
 
-    /// When `false`, disables analytics across Forall product surfaces in this machine.
-    /// Defaults to `true`.
-    pub analytics: Option<AnalyticsConfigToml>,
+    /// Ignored for compatibility with older configuration files.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub analytics: Option<serde_json::Value>,
 
-    /// When `false`, disables feedback collection across Forall product surfaces.
-    /// Defaults to `true`.
-    pub feedback: Option<FeedbackConfigToml>,
+    /// Ignored for compatibility with older configuration files.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub feedback: Option<serde_json::Value>,
 
     /// Opaque desktop settings stored alongside the rest of config.toml.
     #[serde(default)]
     pub desktop: Option<HashMap<String, JsonValue>>,
 
-    /// OTEL configuration.
-    pub otel: Option<OtelConfigToml>,
+    /// Ignored for compatibility with older configuration files.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub otel: Option<serde_json::Value>,
 
     /// Windows-specific configuration.
     #[serde(default)]

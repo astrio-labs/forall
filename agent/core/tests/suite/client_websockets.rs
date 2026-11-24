@@ -67,7 +67,6 @@ const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
     "ws_request_header_x_openai_internal_forall_responses_lite";
-const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const TEST_WINDOW_ID: &str = "test-thread:0";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-forall-ws-stream-request-start-ms";
@@ -115,7 +114,6 @@ fn responses_metadata(
     request_kind: TestForallResponsesRequestKind,
 ) -> ForallResponsesMetadata {
     test_responses_metadata(
-        TEST_INSTALLATION_ID,
         &harness.session_id.to_string(),
         &harness.thread_id.to_string(),
         turn_id,
@@ -192,9 +190,10 @@ async fn responses_websocket_streams_request() {
         handshake.header(USER_AGENT_HEADER),
         Some(forall_login::default_client::get_forall_user_agent())
     );
-    assert_eq!(
-        body["client_metadata"]["x-forall-installation-id"].as_str(),
-        Some(TEST_INSTALLATION_ID)
+    assert!(
+        body["client_metadata"]
+            .get("x-forall-installation-id")
+            .is_none()
     );
     let stream_request_start_ms = body["client_metadata"]
         [X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY]

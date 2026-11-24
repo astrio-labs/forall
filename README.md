@@ -106,17 +106,6 @@ rung depends on the tool behind it:
 
 We are expanding to more languages, and to filling in more of this table for the languages already listed, based on demand.
 
-## Telemetry
-
-Product analytics require an explicitly configured ingest endpoint. To disable
-product analytics even when an endpoint has been configured, set the following
-in `~/.forall/config.toml`.
-
-```toml
-[analytics]
-enabled = false
-```
-
 ## Connect
 
 Join our [Discord](https://discord.com/invite/gESuZkdD5R) and [X](https://x.com/astriolabs) communities.
@@ -124,3 +113,12 @@ Join our [Discord](https://discord.com/invite/gESuZkdD5R) and [X](https://x.com/
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
+
+Forall includes a modified version of the OpenAI Codex agent runtime.
+
+OpenAI Codex
+Copyright 2025 OpenAI
+
+This project includes code derived from [Ratatui](https://github.com/ratatui/ratatui), licensed under the MIT license.
+Copyright (c) 2016-2022 Florian Dehau
+Copyright (c) 2023-2025 The Ratatui Developers

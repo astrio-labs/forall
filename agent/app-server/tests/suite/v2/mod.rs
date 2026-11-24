@@ -1,6 +1,5 @@
 mod account;
 mod account_usage;
-mod analytics;
 mod attestation;
 mod client_metadata;
 mod collaboration_mode_list;
@@ -80,3 +79,18 @@ mod turn_start_zsh_fork;
 mod turn_steer;
 mod web_search;
 mod windows_sandbox_setup;
+
+fn write_test_account(forall_home: &std::path::Path) -> anyhow::Result<()> {
+    use app_test_support::{ApiKeyAuthFixture, write_api_key_auth};
+    use forall_config::types::AuthCredentialsStoreMode;
+    write_api_key_auth(
+        forall_home,
+        ApiKeyAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    Ok(())
+}

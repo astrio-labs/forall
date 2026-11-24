@@ -5,9 +5,9 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 
 use crate::attestation::app_server_attestation_provider;
+use crate::browser_open::app_server_browser_opener;
 use crate::config_manager::ConfigManager;
 use crate::connection_rpc_gate::ConnectionRpcGate;
-use crate::browser_open::app_server_browser_opener;
 use crate::current_time::app_server_time_provider;
 use crate::error_code::invalid_request;
 use crate::extensions::ThreadExtensionDependencies;
@@ -26,7 +26,6 @@ use crate::request_processors::ConfigRequestProcessor;
 use crate::request_processors::EnvironmentRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessor;
 use crate::request_processors::ExternalAgentConfigRequestProcessorArgs;
-use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
 use crate::request_processors::GitRequestProcessor;
 use crate::request_processors::InitializeRequestProcessor;
@@ -64,7 +63,6 @@ use forall_core::ThreadManager;
 use forall_core::config::Config;
 use forall_core::workspace_settings;
 use forall_exec_server::EnvironmentManager;
-use forall_feedback::ForallFeedback;
 use forall_goal_extension::GoalService;
 use forall_home::ForallHomeUserInstructionsProvider;
 use forall_login::AuthManager;
@@ -111,7 +109,6 @@ pub(crate) struct MessageProcessor {
     config_processor: ConfigRequestProcessor,
     environment_processor: EnvironmentRequestProcessor,
     external_agent_config_processor: ExternalAgentConfigRequestProcessor,
-    feedback_processor: FeedbackRequestProcessor,
     fs_processor: FsRequestProcessor,
     git_processor: GitRequestProcessor,
     initialize_processor: InitializeRequestProcessor,
@@ -208,13 +205,11 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config: Arc<Config>,
     pub(crate) config_manager: ConfigManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) feedback: ForallFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) installation_id: String,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
 }
@@ -230,13 +225,11 @@ impl MessageProcessor {
             config,
             config_manager,
             environment_manager,
-            feedback,
             log_db,
             state_db,
             config_warnings,
             session_source,
             auth_manager,
-            installation_id,
             rpc_transport,
             plugin_startup_tasks,
         } = args;
@@ -284,7 +277,6 @@ impl MessageProcessor {
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
                 state_db.clone(),
-                installation_id,
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
                     thread_state_manager.clone(),
@@ -337,14 +329,6 @@ impl MessageProcessor {
         let process_exec_processor = ProcessExecRequestProcessor::new(
             outgoing.clone(),
             Arc::clone(&environment_manager_for_requests),
-        );
-        let feedback_processor = FeedbackRequestProcessor::new(
-            auth_manager.clone(),
-            Arc::clone(&thread_manager),
-            Arc::clone(&config),
-            feedback,
-            log_db.clone(),
-            state_db.clone(),
         );
         let git_processor = GitRequestProcessor::new();
         let initialize_processor = InitializeRequestProcessor::new(
@@ -466,7 +450,6 @@ impl MessageProcessor {
             config_processor,
             environment_processor,
             external_agent_config_processor,
-            feedback_processor,
             fs_processor,
             git_processor,
             initialize_processor,
@@ -1700,10 +1683,11 @@ impl MessageProcessor {
                         .await
                 })
             }
-            ClientRequest::FeedbackUpload { params, .. } => {
-                let this = Arc::clone(&this);
-                Box::pin(async move { this.feedback_processor.feedback_upload(params).await })
-            }
+            ClientRequest::FeedbackUpload { .. } => Box::pin(async {
+                Err(invalid_request(
+                    "Feedback uploads are unavailable in Forall.",
+                ))
+            }),
         }
     }
 }

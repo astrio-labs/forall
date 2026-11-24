@@ -3,9 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ApiKeyAuthFixture;
-use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
-use app_test_support::start_analytics_events_server;
 use app_test_support::to_response;
 use app_test_support::write_api_key_auth;
 use forall_app_server_protocol::JSONRPCResponse;
@@ -14,7 +12,6 @@ use forall_app_server_protocol::PluginUninstallResponse;
 use forall_app_server_protocol::RequestId;
 use forall_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -76,80 +73,6 @@ enabled = true
     let response: PluginUninstallResponse = to_response(response)?;
     assert_eq!(response, PluginUninstallResponse {});
 
-    Ok(())
-}
-
-#[ignore = "requires Forall/ChatGPT backend auth stubbed out in BYOK build"]
-#[tokio::test]
-async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
-    let analytics_server = start_analytics_events_server().await?;
-    let forall_home = TempDir::new()?;
-    write_installed_plugin(&forall_home, "debug", "sample-plugin")?;
-    std::fs::write(
-        forall_home.path().join("config.toml"),
-        format!(
-            "[analytics]\nenabled = true\nendpoint = \"{}/v1/analytics/events\"\n\n[features]\nplugins = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
-            analytics_server.uri()
-        ),
-    )?;
-    write_api_key_auth(
-        forall_home.path(),
-        ApiKeyAuthFixture::new("chatgpt-token")
-            .account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .chatgpt_account_id("account-123"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp = TestAppServer::new(forall_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: "sample-plugin@debug".to_string(),
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginUninstallResponse = to_response(response)?;
-    assert_eq!(response, PluginUninstallResponse {});
-
-    let payload = timeout(DEFAULT_TIMEOUT, async {
-        loop {
-            let Some(requests) = analytics_server.received_requests().await else {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-                continue;
-            };
-            if let Some(request) = requests.iter().find(|request| {
-                request.method == "POST" && request.url.path() == "/v1/analytics/events"
-            }) {
-                break request.body.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("analytics payload");
-    assert_eq!(
-        payload,
-        json!({
-            "events": [{
-                "event_type": "forall_plugin_uninstalled",
-                "event_params": {
-                    "plugin_id": "sample-plugin@debug",
-                    "plugin_name": "sample-plugin",
-                    "marketplace_name": "debug",
-                    "has_skills": false,
-                    "mcp_server_count": 0,
-                    "connector_ids": [],
-                    "product_client_id": DEFAULT_CLIENT_NAME,
-                }
-            }]
-        })
-    );
     Ok(())
 }
 

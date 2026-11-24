@@ -64,8 +64,6 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
-const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
-
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let thread_id = ThreadId::new();
@@ -96,7 +94,6 @@ fn test_responses_metadata_for_client(
 ) -> ForallResponsesMetadata {
     let thread_id = client.state.thread_id.to_string();
     test_responses_metadata(
-        TEST_INSTALLATION_ID,
         &thread_id,
         &thread_id,
         turn_id,
@@ -328,12 +325,9 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .expect("turn metadata"),
     )
     .expect("valid turn metadata");
+    assert!(!client_metadata.contains_key(X_CODEX_INSTALLATION_ID_HEADER));
+    assert!(turn_metadata.get("installation_id").is_none());
     for (client_key, metadata_key, expected) in [
-        (
-            X_CODEX_INSTALLATION_ID_HEADER,
-            "installation_id",
-            "11111111-1111-4111-8111-111111111111",
-        ),
         ("session_id", "session_id", thread_id.as_str()),
         ("thread_id", "thread_id", thread_id.as_str()),
         ("turn_id", "turn_id", "turn-123"),

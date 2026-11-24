@@ -259,12 +259,6 @@ impl TurnEnvironmentSnapshot {
 
         (!environment.environment.is_remote()).then_some(environment)
     }
-
-    pub(crate) fn single_local_environment_cwd(&self) -> Option<AbsolutePathBuf> {
-        // TODO(anp): Migrate local-environment consumers to PathUri so this compatibility
-        // conversion can be removed.
-        self.single_local_environment()?.cwd().to_abs_path().ok()
-    }
 }
 
 #[cfg(test)]
@@ -828,50 +822,5 @@ url = "ws://127.0.0.1:8765"
                 .environment,
             &inherited_environment,
         ));
-    }
-
-    #[tokio::test]
-    async fn single_local_environment_cwd_requires_exactly_one_local_environment() {
-        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
-        let cwd_uri = PathUri::from_abs_path(&cwd);
-        let local_manager = Arc::new(EnvironmentManager::default_for_tests());
-        let local = resolve_turn_environments(
-            Arc::clone(&local_manager),
-            &[TurnEnvironmentSelection {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: cwd_uri.clone(),
-            }],
-        )
-        .await;
-        let local = local.snapshot().await;
-        let remote_environment = Arc::new(
-            Environment::create_for_tests(Some("ws://127.0.0.1:8765".to_string()))
-                .expect("remote environment"),
-        );
-        let remote = TurnEnvironmentSnapshot {
-            turn_environments: vec![TurnEnvironment::new(
-                REMOTE_ENVIRONMENT_ID.to_string(),
-                remote_environment.clone(),
-                cwd_uri.clone(),
-                /*shell*/ None,
-            )],
-            starting: Vec::new(),
-        };
-        let multiple = TurnEnvironmentSnapshot {
-            turn_environments: vec![
-                local.primary().expect("local environment").clone(),
-                TurnEnvironment::new(
-                    REMOTE_ENVIRONMENT_ID.to_string(),
-                    remote_environment,
-                    cwd_uri,
-                    /*shell*/ None,
-                ),
-            ],
-            starting: Vec::new(),
-        };
-
-        assert_eq!(local.single_local_environment_cwd(), Some(cwd));
-        assert_eq!(remote.single_local_environment_cwd(), None);
-        assert_eq!(multiple.single_local_environment_cwd(), None);
     }
 }

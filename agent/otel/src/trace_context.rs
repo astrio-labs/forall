@@ -49,17 +49,6 @@ pub fn span_w3c_trace_context(span: &Span) -> Option<W3cTraceContext> {
     })
 }
 
-pub(crate) fn set_tracestate_entries(
-    entries: BTreeMap<String, BTreeMap<String, String>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    validate_tracestate_entries(&entries)?;
-    let mut guard = tracestate_entries()
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = entries;
-    Ok(())
-}
-
 pub fn current_span_trace_id() -> Option<String> {
     let context = Span::current().context();
     let span = context.span();

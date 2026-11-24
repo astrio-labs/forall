@@ -28,7 +28,6 @@ use forall_core::NewThread;
 use forall_core::Prompt;
 use forall_core::ResponseEvent;
 use forall_core::ThreadManager;
-use forall_core::resolve_installation_id;
 use forall_core::thread_store_from_config;
 use forall_extension_api::empty_extension_registry;
 use forall_features::Feature;
@@ -93,9 +92,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-const INSTALLATION_ID_FILENAME: &str = "installation_id";
 const TEST_WINDOW_ID: &str = "test-thread:0";
-const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn test_turn_responses_metadata(
     _client: &ModelClient,
@@ -103,7 +100,6 @@ fn test_turn_responses_metadata(
 ) -> forall_core::ForallResponsesMetadata {
     let thread_id = thread_id.to_string();
     test_responses_metadata(
-        TEST_INSTALLATION_ID,
         &thread_id,
         &thread_id,
         /*turn_id*/ None,
@@ -154,15 +150,11 @@ fn response_message_item_id(request: &ResponsesRequest, role: &str, text: &str) 
 
 fn assert_forall_client_metadata(
     request_body: &serde_json::Value,
-    installation_id: &str,
     session_id: &str,
     thread_id: &str,
 ) {
     let client_metadata = &request_body["client_metadata"];
-    assert_eq!(
-        client_metadata["x-forall-installation-id"].as_str(),
-        Some(installation_id)
-    );
+    assert!(client_metadata.get("x-forall-installation-id").is_none());
     assert_eq!(client_metadata["session_id"].as_str(), Some(session_id));
     assert_eq!(client_metadata["thread_id"].as_str(), Some(thread_id));
     let turn_metadata_str = client_metadata["x-forall-turn-metadata"]
@@ -170,10 +162,7 @@ fn assert_forall_client_metadata(
         .expect("missing x-forall-turn-metadata client metadata");
     let turn_metadata = serde_json::from_str::<serde_json::Value>(turn_metadata_str)
         .expect("invalid x-forall-turn-metadata json");
-    assert_eq!(
-        turn_metadata["installation_id"].as_str(),
-        Some(installation_id)
-    );
+    assert!(turn_metadata.get("installation_id").is_none());
     assert_eq!(turn_metadata["session_id"].as_str(), Some(session_id));
     assert_eq!(turn_metadata["thread_id"].as_str(), Some(thread_id));
     assert_eq!(
@@ -1097,9 +1086,6 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
         .expect("authorization header");
     let request_originator = request.header("originator").expect("originator header");
     let request_body = request.body_json();
-    let installation_id =
-        std::fs::read_to_string(test.forall_home_path().join(INSTALLATION_ID_FILENAME))
-            .expect("read installation id");
     let session_id_string = expected_session_id.to_string();
     let thread_id_string = expected_thread_id.to_string();
 
@@ -1113,7 +1099,6 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     );
     assert_forall_client_metadata(
         &request_body,
-        installation_id.as_str(),
         session_id_string.as_str(),
         thread_id_string.as_str(),
     );
@@ -2057,9 +2042,6 @@ async fn chatgpt_auth_sends_correct_request() {
 
     let request_session_id = request.header("session-id").expect("session-id header");
     let request_thread_id = request.header("thread-id").expect("thread-id header");
-    let installation_id =
-        std::fs::read_to_string(test.forall_home_path().join(INSTALLATION_ID_FILENAME))
-            .expect("read installation id");
     let session_id_string = expected_session_id.to_string();
     let thread_id_string = expected_thread_id.to_string();
     assert_eq!(request_session_id, session_id_string.as_str());
@@ -2070,7 +2052,6 @@ async fn chatgpt_auth_sends_correct_request() {
     assert_eq!(request_chatgpt_account_id, "account_id");
     assert_forall_client_metadata(
         &request_body,
-        installation_id.as_str(),
         session_id_string.as_str(),
         thread_id_string.as_str(),
     );
@@ -2136,9 +2117,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     .expect("Failed to load ForallAuth")
     .expect("No ForallAuth found in forall_home");
     let auth_manager = forall_core::test_support::auth_manager_from_auth(auth);
-    let installation_id = resolve_installation_id(&config.forall_home)
-        .await
-        .expect("resolve installation id");
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
@@ -2149,7 +2127,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
         /*state_db*/ None,
-        installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         /*external_browser_opener*/ None,

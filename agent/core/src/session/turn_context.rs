@@ -776,13 +776,6 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        if turn_context
-            .environments
-            .single_local_environment_cwd()
-            .is_some()
-        {
-            turn_context.turn_metadata_state.spawn_git_enrichment_task();
-        }
         turn_context
     }
 

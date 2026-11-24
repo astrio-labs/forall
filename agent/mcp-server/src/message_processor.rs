@@ -55,7 +55,6 @@ impl MessageProcessor {
         config: Arc<Config>,
         environment_manager: Arc<EnvironmentManager>,
         state_db: Option<StateDbHandle>,
-        installation_id: String,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared_from_config(
@@ -76,10 +75,9 @@ impl MessageProcessor {
             /*analytics_events_client*/ None,
             forall_core::thread_store_from_config(config.as_ref(), state_db.clone()),
             state_db.clone(),
-            installation_id,
             /*attestation_provider*/ None,
             /*external_time_provider*/ None,
-        /*external_browser_opener*/ None,
+            /*external_browser_opener*/ None,
         ));
         Self {
             outgoing,

@@ -59,7 +59,24 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
         /*supports_websockets*/ false,
     )?;
 
-    let mut mcp = TestAppServer::new(forall_home.path()).await?;
+    let collector = wiremock::MockServer::start().await;
+    let endpoint = collector.uri();
+    let capture = forall_home.path().join("analytics.jsonl");
+    let config_path = forall_home.path().join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str(&format!(
+        "\n[analytics]\nenabled = true\nendpoint = \"{endpoint}\"\n[otel]\nendpoint = \"{endpoint}\"\n[feedback]\nenabled = true\n"
+    ));
+    std::fs::write(config_path, config)?;
+    let mut mcp = TestAppServer::new_without_managed_config_with_env(
+        forall_home.path(),
+        &[
+            ("FORALL_ANALYTICS_ENDPOINT", Some(endpoint.as_str())),
+            ("FORALL_ANALYTICS_EVENTS_CAPTURE_FILE", capture.to_str()),
+            ("FORALL_OTEL_ENDPOINT", Some(endpoint.as_str())),
+        ],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -114,12 +131,39 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
     assert_eq!(metadata["thread_source"].as_str(), Some("automation"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
-    assert!(metadata.get("installation_id").is_some());
+    assert!(metadata.get("installation_id").is_none());
+    assert!(metadata.get("workspaces").is_none());
     assert!(metadata.get("session_id").is_some());
     assert_eq!(
         metadata["window_id"].as_str(),
         request.header("x-forall-window-id").as_deref()
     );
+
+    let feedback_id = mcp
+        .send_raw_request(
+            "feedback/upload",
+            Some(serde_json::json!({"classification": "bug", "includeLogs": true})),
+        )
+        .await?;
+    let rejection = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(feedback_id)),
+    )
+    .await??;
+    assert_eq!(
+        rejection.error.message,
+        "Feedback uploads are unavailable in Forall."
+    );
+    drop(mcp);
+    assert!(
+        collector
+            .received_requests()
+            .await
+            .expect("collector recording")
+            .is_empty()
+    );
+    assert!(!capture.exists());
+    assert!(!forall_home.path().join("installation_id").exists());
 
     Ok(())
 }

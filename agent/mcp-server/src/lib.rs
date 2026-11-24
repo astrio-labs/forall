@@ -4,10 +4,11 @@
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
 
 use forall_arg0::Arg0DispatchPaths;
 use forall_core::config::ConfigBuilder;
-use forall_core::resolve_installation_id;
 use forall_exec_server::EnvironmentManager;
 use forall_exec_server::ExecServerRuntimePaths;
 use forall_login::default_client::set_default_client_residency_requirement;
@@ -17,8 +18,6 @@ use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::JsonRpcMessage;
 use serde_json::Value;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::{self};
 use tokio::sync::mpsc;
@@ -51,8 +50,6 @@ pub use crate::patch_approval::PatchApprovalResponse;
 /// is a balance between throughput and memory usage – 128 messages should be
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
-const DEFAULT_METRICS_ENABLED: bool = true;
-const OTEL_SERVICE_NAME: &str = "forall_mcp_server";
 
 type IncomingMessage = JsonRpcMessage<ClientRequest, Value, ClientNotification>;
 
@@ -78,20 +75,6 @@ pub async fn run_main(
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
     set_default_client_residency_requirement(config.enforce_residency.value());
-    let otel = forall_core::otel_init::build_provider(
-        &config,
-        env!("CARGO_PKG_VERSION"),
-        Some(OTEL_SERVICE_NAME),
-        DEFAULT_METRICS_ENABLED,
-    )
-    .map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("error loading otel config: {e}"),
-        )
-    })?;
-    forall_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
-    forall_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let state_db = forall_core::init_state_db(&config).await;
     let environment_manager = Arc::new(
         EnvironmentManager::from_forall_home(
@@ -108,19 +91,17 @@ pub async fn run_main(
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_filter(EnvFilter::from_default_env());
-    let otel_logger_layer = otel.as_ref().and_then(|provider| provider.logger_layer());
-    let otel_tracing_layer = otel.as_ref().and_then(|provider| provider.tracing_layer());
 
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
-        .with(otel_logger_layer)
-        .with(otel_tracing_layer)
+        .with(tracing_subscriber::filter::filter_fn(
+            forall_core::util::local_log_metadata,
+        ))
         .try_init();
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<IncomingMessage>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
-    let installation_id = resolve_installation_id(&config.forall_home).await?;
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -154,7 +135,6 @@ pub async fn run_main(
             Arc::new(config),
             environment_manager,
             state_db,
-            installation_id,
         )
         .await;
         async move {
@@ -200,57 +180,4 @@ pub async fn run_main(
     let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use forall_config::types::OtelExporterKind;
-    use forall_core::config::ConfigBuilder;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
-    use tempfile::TempDir;
-
-    #[test]
-    fn mcp_server_defaults_analytics_to_enabled() {
-        assert_eq!(DEFAULT_METRICS_ENABLED, true);
-    }
-
-    #[tokio::test]
-    async fn mcp_server_builds_otel_provider_with_logs_traces_and_metrics() -> anyhow::Result<()> {
-        let forall_home = TempDir::new()?;
-        let mut config = ConfigBuilder::default()
-            .forall_home(forall_home.path().to_path_buf())
-            .build()
-            .await?;
-        let exporter = OtelExporterKind::OtlpGrpc {
-            endpoint: "http://localhost:4317".to_string(),
-            headers: HashMap::new(),
-            tls: None,
-        };
-        config.otel.exporter = exporter.clone();
-        config.otel.trace_exporter = exporter.clone();
-        config.otel.metrics_exporter = exporter;
-        config.otel.metrics_exporter_configured = true;
-        config.analytics_enabled = None;
-
-        let provider = forall_core::otel_init::build_provider(
-            &config,
-            "0.0.0-test",
-            Some(OTEL_SERVICE_NAME),
-            DEFAULT_METRICS_ENABLED,
-        )
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?
-        .expect("otel provider");
-
-        assert!(provider.logger.is_some(), "expected log exporter");
-        assert!(
-            provider.tracer_provider.is_some(),
-            "expected trace exporter"
-        );
-        assert!(provider.metrics().is_some(), "expected metrics exporter");
-        provider.shutdown();
-
-        Ok(())
-    }
 }

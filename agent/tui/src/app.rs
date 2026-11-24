@@ -826,11 +826,12 @@ impl App {
             bootstrap.account_email.clone(),
             auth_mode,
             forall_login::default_client::originator().value,
-            config.otel.log_user_prompt,
+            /*log_user_prompt*/ false,
             user_agent(),
             serde_json::from_value(serde_json::json!("cli"))
                 .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
-        );
+        )
+        .with_local_runtime_metrics(config.features.enabled(Feature::RuntimeMetrics));
         if config
             .tui_status_line
             .as_ref()
