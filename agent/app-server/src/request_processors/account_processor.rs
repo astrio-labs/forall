@@ -353,7 +353,12 @@ impl AccountRequestProcessor {
         &self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        match set_byok_api_key(
+        let save_key = if params.model_provider.is_some() {
+            forall_login::save_preferred_provider_key
+        } else {
+            set_byok_api_key
+        };
+        match save_key(
             &self.config.forall_home,
             params.model_provider.as_deref().unwrap_or("openai"),
             &params.api_key,
@@ -420,31 +425,38 @@ impl AccountRequestProcessor {
         const OPENROUTER_PROVIDER_ID: &str = "openrouter";
         const OPENROUTER_DEFAULT_MODEL: &str = "openrouter/auto";
 
-        let model_value = if model_provider_id == OPENROUTER_PROVIDER_ID {
-            json!(OPENROUTER_DEFAULT_MODEL)
-        } else {
-            json!(null)
-        };
+        let mut edits = vec![
+            ConfigEdit {
+                key_path: "model_provider".to_string(),
+                value: json!(model_provider_id),
+                merge_strategy: MergeStrategy::Replace,
+            },
+            ConfigEdit {
+                key_path: "byok_provider".to_string(),
+                value: json!(model_provider_id),
+                merge_strategy: MergeStrategy::Replace,
+            },
+        ];
+        let current = self
+            .config_manager
+            .load_latest_config(None)
+            .await
+            .map_err(|err| internal_error(format!("failed to read model provider: {err}")))?;
+        if current.model_provider_id != model_provider_id {
+            edits.push(ConfigEdit {
+                key_path: "model".to_string(),
+                value: if model_provider_id == OPENROUTER_PROVIDER_ID {
+                    json!(OPENROUTER_DEFAULT_MODEL)
+                } else {
+                    json!(null)
+                },
+                merge_strategy: MergeStrategy::Replace,
+            });
+        }
 
         self.config_manager
             .batch_write(ConfigBatchWriteParams {
-                edits: vec![
-                    ConfigEdit {
-                        key_path: "model_provider".to_string(),
-                        value: json!(model_provider_id),
-                        merge_strategy: MergeStrategy::Replace,
-                    },
-                    ConfigEdit {
-                        key_path: "byok_provider".to_string(),
-                        value: json!(model_provider_id),
-                        merge_strategy: MergeStrategy::Replace,
-                    },
-                    ConfigEdit {
-                        key_path: "model".to_string(),
-                        value: model_value,
-                        merge_strategy: MergeStrategy::Replace,
-                    },
-                ],
+                edits,
                 file_path: None,
                 expected_version: None,
                 reload_user_config: true,

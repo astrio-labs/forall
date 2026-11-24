@@ -148,7 +148,7 @@ pub(crate) enum ByokProvider {
 }
 
 impl ByokProvider {
-    fn model_provider_id(self) -> &'static str {
+    pub(crate) fn model_provider_id(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
             Self::OpenRouter => "openrouter",
@@ -158,7 +158,7 @@ impl ByokProvider {
         }
     }
 
-    fn display_name(self) -> &'static str {
+    pub(crate) fn display_name(self) -> &'static str {
         match self {
             Self::OpenAi => "OpenAI",
             Self::OpenRouter => "OpenRouter",
@@ -168,7 +168,7 @@ impl ByokProvider {
         }
     }
 
-    fn env_var_name(self) -> &'static str {
+    pub(crate) fn env_var_name(self) -> &'static str {
         match self {
             Self::OpenAi => "OPENAI_API_KEY",
             Self::OpenRouter => "OPENROUTER_API_KEY",
@@ -198,7 +198,7 @@ impl ByokProvider {
         }
     }
 
-    const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::OpenAi,
         Self::OpenRouter,
         Self::Azure,
@@ -717,7 +717,7 @@ impl AuthModeWidget {
         let mut lines: Vec<Line> = vec![
             "Choose your model provider".bold().into(),
             "".into(),
-            "  Bring your own API key from ~/.forall/.env or a project .env file.".into(),
+            "  Choose a provider to use a configured key or enter a new one.".into(),
             "".into(),
         ];
 
@@ -746,7 +746,7 @@ impl AuthModeWidget {
         lines.push(Line::from(vec![
             "  Press ".dim(),
             self.confirm_binding().into(),
-            " after setting the key in .env".dim(),
+            " to continue".dim(),
         ]));
         if let Some(err) = self.error_message() {
             lines.push("".into());
@@ -785,7 +785,8 @@ impl AuthModeWidget {
                 format!("Use your own {} API key", provider.display_name()).bold(),
             ]),
             "".into(),
-            "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
+            "  Paste or type your API key below. Forall will save it in its credential store."
+                .into(),
             "".into(),
         ];
         if state.prepopulated_from_env {
@@ -810,7 +811,7 @@ impl AuthModeWidget {
         let content_line: Line = if state.value.is_empty() {
             vec!["Paste or type your API key".dim()].into()
         } else {
-            Line::from(state.value.clone())
+            Line::from("•".repeat(state.value.chars().count().min(60)))
         };
         Paragraph::new(content_line)
             .wrap(Wrap { trim: false })
@@ -939,18 +940,6 @@ impl AuthModeWidget {
         )
     }
 
-    fn persist_provider_selection(&self, provider: ByokProvider) {
-        let request_handle = self.app_server_request_handle.clone();
-        let provider_id = provider.model_provider_id().to_string();
-        tokio::spawn(async move {
-            let _ = config_update::write_config_batch(
-                request_handle,
-                config_update::build_byok_provider_edits(&provider_id),
-            )
-            .await;
-        });
-    }
-
     fn confirm_byok_provider_selection(&mut self) {
         load_byok_env_files(&self.forall_home);
         self.set_error(/*message*/ None);
@@ -991,19 +980,11 @@ impl AuthModeWidget {
             });
             return;
         }
-        self.persist_provider_selection(provider);
-        if let Some(api_key) = env_key {
-            self.save_api_key(api_key);
-            return;
-        }
-        if let Some(api_key) = stored_key {
-            self.save_api_key(api_key);
-            return;
-        }
-        self.set_error(Some(format!(
-            "Add {} to ~/.forall/.env or a .env file in your project, then press Enter to retry.",
-            provider.env_var_name()
-        )));
+        *self.sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
+            provider,
+            value: String::new(),
+            prepopulated_from_env: false,
+        });
         self.request_frame.schedule_frame();
     }
 

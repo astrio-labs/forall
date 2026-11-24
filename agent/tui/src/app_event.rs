@@ -152,6 +152,7 @@ pub(crate) enum AppEvent {
 
     /// Start a new session.
     NewSession,
+    EditProviderKey(crate::onboarding::ByokProvider),
 
     /// Result of the fresh startup thread that is attached after the input UI is live.
     StartupThreadStarted {

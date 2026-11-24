@@ -92,10 +92,11 @@ impl<'a> SlashInput<'a> {
         }
         let first_line = text.lines().next().unwrap_or("");
         let (name, rest, _rest_offset) = parse_slash_name(first_line)?;
-        if !rest.is_empty() {
+        let command = self.command(name)?;
+        // /provider accepts secrets only in its masked field. Consume accidental inline text locally.
+        if !rest.is_empty() && command != SlashCommandItem::Builtin(SlashCommand::Provider) {
             return None;
         }
-        let command = self.command(name)?;
         if command.supports_inline_args()
             && parse_slash_name(text).is_some_and(|(_, full_rest, _)| !full_rest.is_empty())
         {

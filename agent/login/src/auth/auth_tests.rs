@@ -15,6 +15,7 @@ use crate::auth::storage::FileAuthStorage;
 fn api_key_auth_dot_json(api_key: &str) -> AuthDotJson {
     AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
         openrouter_api_key: None,
@@ -29,6 +30,7 @@ fn api_key_auth_dot_json(api_key: &str) -> AuthDotJson {
 fn forall_auth_from_auth_dot_json_prefers_bedrock() {
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-openai".to_string()),
         openrouter_api_key: None,
@@ -57,6 +59,7 @@ fn forall_auth_from_auth_dot_json_uses_openai_key() {
 fn forall_auth_from_auth_dot_json_uses_openrouter_key() {
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: None,
         openai_api_key: None,
         openrouter_api_key: Some("sk-or".to_string()),
@@ -81,6 +84,7 @@ fn forall_auth_from_auth_dot_json_uses_oauth_tokens() {
     };
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: None,
         // OAuth tokens win over stored BYOK keys.
         openai_api_key: Some("sk-openai".to_string()),

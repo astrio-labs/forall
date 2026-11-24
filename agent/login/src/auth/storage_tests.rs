@@ -20,6 +20,7 @@ async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
     let storage = FileAuthStorage::new(forall_home.path().to_path_buf());
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("test-key".to_string()),
         openrouter_api_key: None,
@@ -44,6 +45,7 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
     let storage = FileAuthStorage::new(forall_home.path().to_path_buf());
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("test-key".to_string()),
         openrouter_api_key: None,
@@ -71,6 +73,7 @@ async fn file_storage_round_trips_auth_without_optional_fields() -> anyhow::Resu
     let storage = FileAuthStorage::new(forall_home.path().to_path_buf());
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: None,
         openai_api_key: None,
         openrouter_api_key: None,
@@ -92,6 +95,7 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
         openrouter_api_key: None,
@@ -124,6 +128,7 @@ fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> 
     );
     let auth_dot_json = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-ephemeral".to_string()),
         openrouter_api_key: None,
@@ -253,6 +258,7 @@ fn id_token_with_prefix(prefix: &str) -> IdTokenInfo {
 fn auth_with_prefix(prefix: &str) -> AuthDotJson {
     AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(format!("{prefix}-api-key")),
         openrouter_api_key: None,
@@ -278,6 +284,7 @@ fn secrets_keyring_auth_storage_load_returns_deserialized_auth() -> anyhow::Resu
     );
     let expected = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-test".to_string()),
         openrouter_api_key: None,
@@ -415,6 +422,7 @@ fn secrets_keyring_auth_storage_save_persists_and_removes_fallback_file() -> any
     std::fs::write(&auth_file, "stale")?;
     let auth = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
         openrouter_api_key: None,

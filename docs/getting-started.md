@@ -40,7 +40,16 @@ See [Project Layout](project-layout.md) and [Workflow](workflow.md).
 
 ### BYOK model providers
 
-Set keys in `~/.forall/.env` (or export them in your shell), then pick the provider during onboarding. Amazon Bedrock is configured through `config.toml` rather than onboarding:
+In the interactive CLI, run `/provider` and choose a provider. Paste the key into
+the masked field and press Enter. If a key is already configured locally, press
+Enter on an empty field to keep it. Azure also needs your resource endpoint.
+Saving opens a new chat with the provider. To return to an earlier chat,
+select its provider and run `/resume`.
+
+Forall saves entered keys in its configured credential store. A key you enter
+takes precedence over the same provider's shell or dotenv key. You can also
+supply credentials through `~/.forall/.env` or your shell. Amazon Bedrock
+uses AWS credentials configured separately.
 
 | Provider | Configuration |
 |----------|---------------|

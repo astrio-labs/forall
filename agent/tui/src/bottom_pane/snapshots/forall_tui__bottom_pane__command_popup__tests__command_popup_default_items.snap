@@ -3,6 +3,7 @@ source: tui/src/bottom_pane/command_popup.rs
 expression: commands
 ---
 /model - choose what model and reasoning effort to use (or `/model <slug>`)
+/provider - choose a model provider and manage its API key
 /ide - include current selection, open files, and other context from your IDE
 /permissions - choose what Forall is allowed to do
 /keymap - remap TUI shortcuts

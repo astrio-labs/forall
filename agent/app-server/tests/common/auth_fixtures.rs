@@ -129,6 +129,7 @@ pub fn write_oauth_auth(forall_home: &Path, access_token: &str, refresh_token: &
 
     let auth = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::Oauth),
         openai_api_key: None,
         openrouter_api_key: None,
@@ -160,6 +161,7 @@ pub fn write_api_key_auth(
 
     let auth = AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(api_key),
         openrouter_api_key: None,

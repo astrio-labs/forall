@@ -13,6 +13,7 @@ use tempfile::TempDir;
 fn api_key_auth(api_key: &str) -> AuthDotJson {
     AuthDotJson {
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
         openrouter_api_key: None,

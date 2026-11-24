@@ -257,6 +257,33 @@ impl ChatWidget {
                     .counter("forall.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
             }
+            SlashCommand::Provider => {
+                use crate::onboarding::ByokProvider;
+                let items = ByokProvider::ALL
+                    .into_iter()
+                    .map(|provider| SelectionItem {
+                        name: provider.display_name().into(),
+                        is_current: provider.model_provider_id() == self.config.model_provider_id,
+                        actions: vec![Box::new(move |tx| {
+                            tx.send(AppEvent::EditProviderKey(provider))
+                        })],
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    })
+                    .collect();
+                self.bottom_pane.show_selection_view(SelectionViewParams {
+                    title: Some("Choose a model provider".into()),
+                    subtitle: Some(
+                        "Saving starts a new chat. Your previous chat can be resumed.".into(),
+                    ),
+                    initial_selected_idx: ByokProvider::ALL
+                        .iter()
+                        .position(|p| p.model_provider_id() == self.config.model_provider_id),
+                    items,
+                    footer_hint: Some(standard_popup_hint_line()),
+                    ..Default::default()
+                });
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
                 self.defer_input_until_settings_applied();
@@ -906,7 +933,7 @@ impl ChatWidget {
             return QueueDrain::Continue;
         };
 
-        if rest.is_empty() {
+        if rest.is_empty() || command == SlashCommandItem::Builtin(SlashCommand::Provider) {
             return match command {
                 SlashCommandItem::Builtin(cmd) => {
                     self.dispatch_command(cmd);
@@ -1015,6 +1042,7 @@ impl ChatWidget {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Review
+            | SlashCommand::Provider
             | SlashCommand::Model
             | SlashCommand::Plan
             | SlashCommand::Goal

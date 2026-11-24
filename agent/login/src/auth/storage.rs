@@ -5,6 +5,7 @@ use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
@@ -56,6 +57,10 @@ pub struct AuthDotJson {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_keys: BTreeMap<String, String>,
 
+    /// Providers whose key was explicitly selected in the CLI, ahead of dotenv or shell keys.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub preferred_provider_keys: BTreeSet<String>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenData>,
 
@@ -74,6 +79,14 @@ pub struct AuthDotJson {
 }
 
 impl AuthDotJson {
+    pub(super) fn preferred_provider_key(&self, env_key: &str) -> Option<&str> {
+        if self.preferred_provider_keys.contains(env_key) {
+            self.provider_key(env_key)
+        } else {
+            None
+        }
+    }
+
     /// Returns the stored API key for the given provider env var name.
     ///
     /// Each provider resolves strictly to its own slot; an unknown or unset

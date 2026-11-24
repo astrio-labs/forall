@@ -21,6 +21,30 @@ impl App {
         event: AppEvent,
     ) -> Result<AppRunControl> {
         match event {
+            AppEvent::EditProviderKey(provider) => {
+                let result = crate::provider_setup::configure(
+                    tui,
+                    &self.config,
+                    app_server.request_handle(),
+                    provider,
+                    self.app_server_target.uses_remote_workspace(),
+                )
+                .await;
+                match result {
+                    Ok(true) => {
+                        if let Err(err) = self.activate_provider(tui, app_server, provider).await {
+                            self.chat_widget.add_error_message(format!(
+                                "Provider saved. Could not switch this chat: {err}"
+                            ));
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Provider setup: {err:#}")),
+                }
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,

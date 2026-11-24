@@ -3444,6 +3444,7 @@ mod tests {
     fn stored_auth_validation_rejects_missing_api_key() {
         let auth = AuthDotJson {
             provider_keys: Default::default(),
+            preferred_provider_keys: Default::default(),
             auth_mode: Some(forall_app_server_protocol::AuthMode::ApiKey),
             openai_api_key: None,
             openrouter_api_key: None,
@@ -3464,6 +3465,7 @@ mod tests {
     fn stored_auth_validation_accepts_stored_provider_keys_entry() {
         let mut auth = AuthDotJson {
             provider_keys: Default::default(),
+            preferred_provider_keys: Default::default(),
             auth_mode: Some(forall_app_server_protocol::AuthMode::ApiKey),
             openai_api_key: None,
             openrouter_api_key: None,
@@ -3491,6 +3493,7 @@ mod tests {
     fn stored_auth_validation_defaults_to_api_key_when_mode_missing() {
         let auth = AuthDotJson {
             provider_keys: Default::default(),
+            preferred_provider_keys: Default::default(),
             auth_mode: None,
             openai_api_key: None,
             openrouter_api_key: None,
@@ -3512,6 +3515,7 @@ mod tests {
     fn provider_reachability_mode_uses_api_key_auth() {
         let api_key_auth = AuthDotJson {
             provider_keys: Default::default(),
+            preferred_provider_keys: Default::default(),
             auth_mode: Some(forall_app_server_protocol::AuthMode::ApiKey),
             openai_api_key: Some("sk-test".to_string()),
             openrouter_api_key: None,

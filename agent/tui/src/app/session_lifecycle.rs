@@ -527,6 +527,29 @@ impl App {
         Ok(())
     }
 
+    pub(super) async fn activate_provider(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        provider: crate::onboarding::ByokProvider,
+    ) -> Result<()> {
+        self.refresh_in_memory_config_from_disk().await?;
+        if !self.app_server_target.uses_remote_workspace()
+            && self.config.model_provider_id != provider.model_provider_id()
+        {
+            return Err(color_eyre::eyre::eyre!(
+                "the current configuration overrides the provider with {}",
+                self.config.model_provider_id
+            ));
+        }
+        app_server.reload_user_config().await?;
+        let bootstrap = app_server.bootstrap(&self.config).await?;
+        self.model_catalog = Arc::new(ModelCatalog::new(bootstrap.available_models));
+        self.start_fresh_session_with_summary_hint(tui, app_server, None, None)
+            .await;
+        Ok(())
+    }
+
     pub(super) async fn start_fresh_session_with_summary_hint(
         &mut self,
         tui: &mut tui::Tui,

@@ -34,7 +34,8 @@
 //!
 //! Slash commands are staged for local history instead of being recorded immediately. Command
 //! recall is a two-phase handoff: stage the submitted slash text here, then record it after
-//! `ChatWidget` dispatches the command.
+//! `ChatWidget` dispatches the command. The `/provider` form handles key input separately.
+//! Its command and any accidental inline arguments are excluded from recall.
 //!
 //! # Submission and Prompt Expansion
 //!
@@ -2809,6 +2810,13 @@ impl ChatComposer {
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
                 self.handle_paste(pasted);
             }
+            if matches!(
+                self.slash_input().bare_command(self.draft.textarea.text()),
+                Some(SlashCommandItem::Builtin(SlashCommand::Provider))
+            ) && let Some(result) = self.try_dispatch_bare_slash_command()
+            {
+                return (result, true);
+            }
             let raw_text = self.draft.textarea.text();
             let defer_slash_validation = self.slash_input().should_parse_on_dequeue(raw_text);
             let preserve_pending_pastes = defer_slash_validation
@@ -2939,12 +2947,17 @@ impl ChatComposer {
         }
     }
 
-    /// Check if the first line is a bare slash command (no args) and dispatch it.
+    /// Dispatch a bare slash command. For /provider, discard inline text before it can reach
+    /// either recall history or a model. The provider form handles key entry separately.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
         let command = self
             .slash_input()
             .bare_command(self.draft.textarea.text())?;
+        if command == SlashCommandItem::Builtin(SlashCommand::Provider) {
+            self.draft.textarea.set_text_clearing_elements("");
+            self.draft.pending_pastes.clear();
+        }
         if self.reject_slash_command_if_unavailable(&command) {
             self.stage_slash_command_history(&command);
             self.record_pending_slash_command_history();
@@ -3033,7 +3046,10 @@ impl ChatComposer {
     /// commits the staged entry after dispatch so command recall follows the submitted text, not
     /// the command outcome.
     fn stage_slash_command_history(&mut self, command: &SlashCommandItem) {
-        if matches!(command, SlashCommandItem::Builtin(SlashCommand::Clear)) {
+        if matches!(
+            command,
+            SlashCommandItem::Builtin(SlashCommand::Clear | SlashCommand::Provider)
+        ) {
             return;
         }
         self.stage_slash_command_history_text(self.draft.textarea.text().trim().to_string());
@@ -3044,7 +3060,10 @@ impl ChatComposer {
     /// Popup filtering text can be partial, so recording the selected command avoids recalling
     /// `/di` after the user actually accepted `/diff`.
     fn stage_selected_slash_command_history(&mut self, command: &CommandItem) {
-        if matches!(command, CommandItem::Builtin(SlashCommand::Clear)) {
+        if matches!(
+            command,
+            CommandItem::Builtin(SlashCommand::Clear | SlashCommand::Provider)
+        ) {
             return;
         }
         self.stage_slash_command_history_text(format!("/{}", command.command()));

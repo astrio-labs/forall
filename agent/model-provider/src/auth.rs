@@ -91,15 +91,7 @@ pub(crate) fn resolve_provider_auth_with_manager(
     // account is signed in: direct provider access is exactly what a stored
     // key asks for, and the Forall token is not valid at api.openai.com.
     if provider.is_openai()
-        && let Some(api_key) = read_non_empty_env_var(OPENAI_API_KEY_ENV_VAR)
-            .or_else(|| {
-                auth.and_then(|auth| auth.stored_provider_env_api_key(OPENAI_API_KEY_ENV_VAR))
-            })
-            .or_else(|| {
-                auth_manager.and_then(|manager| {
-                    manager.stored_env_api_key_from_disk(OPENAI_API_KEY_ENV_VAR)
-                })
-            })
+        && let Some(api_key) = resolve_provider_key(OPENAI_API_KEY_ENV_VAR, auth, auth_manager)
     {
         return Ok(Arc::new(BearerAuthProvider::new(api_key)));
     }
@@ -125,15 +117,16 @@ pub(crate) fn resolve_provider_auth_with_manager(
     }
 }
 
-fn provider_env_api_key(
-    provider: &ModelProviderInfo,
+fn resolve_provider_key(
+    env_key: &str,
     auth: Option<&ForallAuth>,
     auth_manager: Option<&AuthManager>,
 ) -> Option<String> {
-    let env_key = provider.env_key.as_ref()?;
+    if let Some(manager) = auth_manager {
+        return manager.provider_api_key(env_key, auth);
+    }
     read_non_empty_env_var(env_key)
         .or_else(|| auth.and_then(|auth| auth.stored_provider_env_api_key(env_key)))
-        .or_else(|| auth_manager.and_then(|manager| manager.stored_env_api_key_from_disk(env_key)))
 }
 
 fn read_non_empty_env_var(key: &str) -> Option<String> {
@@ -147,7 +140,9 @@ fn bearer_auth_for_provider(
     auth: Option<&ForallAuth>,
     auth_manager: Option<&AuthManager>,
 ) -> forall_protocol::error::Result<Option<SharedAuthProvider>> {
-    if let Some(api_key) = provider_env_api_key(provider, auth, auth_manager) {
+    if let Some(env_key) = &provider.env_key
+        && let Some(api_key) = resolve_provider_key(env_key, auth, auth_manager)
+    {
         return Ok(Some(api_key_auth_provider(provider, api_key)?));
     }
 
@@ -309,6 +304,50 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("Bearer sk-openai-env")
         );
+    }
+
+    #[test]
+    #[serial_test::serial(openai_env)]
+    fn explicit_provider_key_wins_after_rotation_while_legacy_keys_follow_env() {
+        use forall_login::AuthKeyringBackendKind;
+        use forall_login::AuthManager;
+        use forall_login::save_preferred_provider_key;
+        let _env = EnvSetGuard::set("OPENAI_API_KEY", "from-env");
+        let dir = tempfile::tempdir().expect("temporary home");
+        std::fs::write(
+            dir.path().join("auth.json"),
+            r#"{"OPENAI_API_KEY":"old-key"}"#,
+        )
+        .expect("legacy auth");
+        let manager = AuthManager::from_auth_for_testing_with_home(
+            ForallAuth::from_api_key("old-key"),
+            dir.path().to_owned(),
+        );
+        let provider = ModelProviderInfo::create_openai_provider(None);
+        let header = || {
+            resolve_provider_auth_with_manager(
+                manager.auth_cached().as_ref(),
+                &provider,
+                Some(&manager),
+            )
+            .expect("provider auth")
+            .to_auth_headers()
+        };
+        assert_eq!(header()[http::header::AUTHORIZATION], "Bearer from-env");
+        for value in ["first-key", "replacement-key"] {
+            save_preferred_provider_key(
+                dir.path(),
+                "openai",
+                value,
+                Default::default(),
+                AuthKeyringBackendKind::default(),
+            )
+            .expect("save key");
+            assert_eq!(
+                header()[http::header::AUTHORIZATION].to_str().unwrap(),
+                format!("Bearer {value}")
+            );
+        }
     }
 
     #[test]

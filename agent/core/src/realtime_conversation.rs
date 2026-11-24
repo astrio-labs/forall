@@ -777,7 +777,7 @@ async fn prepare_realtime_start(
     let requested_realtime_session_id = session_config.session_id.clone();
     let extra_headers = match transport {
         ConversationStartTransport::Websocket => {
-            let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
+            let realtime_api_key = realtime_api_key(&auth_manager, auth.as_ref(), &provider)?;
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
                 Some(realtime_api_key.as_str()),
@@ -1142,9 +1142,19 @@ fn escape_xml_text(input: &str) -> String {
 }
 
 fn realtime_api_key(
+    manager: &forall_login::AuthManager,
     auth: Option<&ForallAuth>,
     provider: &ModelProviderInfo,
 ) -> ForallResult<String> {
+    let env_key = provider.env_key.as_deref().or_else(|| {
+        provider
+            .is_openai()
+            .then_some(forall_login::OPENAI_API_KEY_ENV_VAR)
+    });
+    if let Some(key) = env_key.and_then(|name| manager.preferred_provider_api_key(name)) {
+        return Ok(key);
+    }
+
     if let Some(api_key) = provider.api_key()? {
         return Ok(api_key);
     }

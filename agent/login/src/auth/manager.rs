@@ -159,7 +159,10 @@ impl ApiKeyAuth {
 
 impl ForallAuth {
     fn from_auth_dot_json(auth_dot_json: AuthDotJson) -> Option<Self> {
-        if let Some(auth) = auth_dot_json.bedrock_api_key {
+        if let Some(auth) = auth_dot_json.bedrock_api_key
+            && (auth_dot_json.preferred_provider_keys.is_empty()
+                || auth_dot_json.auth_mode == Some(ApiAuthMode::BedrockApiKey))
+        {
             return Some(Self::BedrockApiKey(auth));
         }
 
@@ -507,6 +510,7 @@ pub fn login_with_api_key(
         openai_api_key: Some(api_key.to_string()),
         openrouter_api_key: None,
         provider_keys: BTreeMap::new(),
+        preferred_provider_keys: Default::default(),
         tokens: None,
         last_refresh: None,
         bedrock_api_key: None,
@@ -662,6 +666,27 @@ fn byok_env_key_for_provider(model_provider_id: &str) -> Option<&'static str> {
         "gemini" => Some(GEMINI_API_KEY_ENV_VAR),
         _ => None,
     }
+}
+
+/// Save an explicitly selected provider key alongside the user's other credentials.
+pub fn save_preferred_provider_key(
+    forall_home: &Path,
+    provider_id: &str,
+    api_key: &str,
+    store_mode: AuthCredentialsStoreMode,
+    keyring_backend: AuthKeyringBackendKind,
+) -> std::io::Result<()> {
+    let env_key = byok_env_key_for_provider(provider_id)
+        .ok_or_else(|| std::io::Error::other("unknown API-key provider"))?;
+    let storage = create_auth_storage(forall_home.to_path_buf(), store_mode, keyring_backend);
+    let _guard = lock_auth_mutation();
+    let mut auth = storage.load()?.unwrap_or_default();
+    if auth.tokens.is_none() {
+        auth.auth_mode = Some(ApiAuthMode::ApiKey);
+    }
+    auth.set_provider_key(env_key, api_key.to_owned());
+    auth.preferred_provider_keys.insert(env_key.to_owned());
+    storage.save(&auth)
 }
 
 /// Stores a BYOK API key for the requested model provider.
@@ -1385,6 +1410,34 @@ impl AuthManager {
             return Some(auth);
         }
         self.auth_cached()
+    }
+
+    fn provider_key_record(&self) -> Option<AuthDotJson> {
+        load_auth_dot_json(
+            &self.forall_home,
+            self.auth_credentials_store_mode,
+            self.keyring_backend_kind,
+        )
+        .ok()
+        .flatten()
+    }
+
+    pub fn preferred_provider_api_key(&self, env_key: &str) -> Option<String> {
+        self.provider_key_record()?
+            .preferred_provider_key(env_key)
+            .map(str::to_owned)
+    }
+
+    /// Resolve an explicitly selected credential before the usual environment-first lookup.
+    pub fn provider_api_key(&self, env_key: &str, auth: Option<&ForallAuth>) -> Option<String> {
+        let record = self.provider_key_record();
+        record
+            .as_ref()
+            .and_then(|r| r.preferred_provider_key(env_key))
+            .map(str::to_owned)
+            .or_else(|| read_non_empty_env_var(env_key))
+            .or_else(|| auth.and_then(|auth| auth.stored_provider_env_api_key(env_key)))
+            .or_else(|| record.as_ref()?.provider_key(env_key).map(str::to_owned))
     }
 
     pub fn stored_env_api_key_from_disk(&self, env_key: &str) -> Option<String> {

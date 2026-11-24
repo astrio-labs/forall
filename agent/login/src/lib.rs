@@ -61,6 +61,7 @@ pub use auth::revoke_stored_oauth_tokens_best_effort;
 pub use auth::save_auth;
 pub use auth::save_github_connection;
 pub use auth::save_oauth_tokens;
+pub use auth::save_preferred_provider_key;
 pub use auth::set_byok_api_key;
 pub use auth::set_openai_api_key;
 pub use auth::set_openrouter_api_key;

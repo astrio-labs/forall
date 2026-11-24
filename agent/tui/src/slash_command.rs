@@ -20,6 +20,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Provider,
     Ide,
     Permissions,
     Keymap,
@@ -113,6 +114,7 @@ impl SlashCommand {
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
+            SlashCommand::Provider => "choose a model provider and manage its API key",
             SlashCommand::Model => {
                 "choose what model and reasoning effort to use (or `/model <slug>`)"
             }
@@ -205,6 +207,7 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
+            | SlashCommand::Provider
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
             | SlashCommand::Resume

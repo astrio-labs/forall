@@ -29,6 +29,7 @@ pub fn login_with_bedrock_api_key(
         openai_api_key: None,
         openrouter_api_key: None,
         provider_keys: Default::default(),
+        preferred_provider_keys: Default::default(),
         tokens: None,
         last_refresh: None,
         bedrock_api_key: Some(BedrockApiKeyAuth {
