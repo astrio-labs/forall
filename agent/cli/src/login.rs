@@ -182,7 +182,7 @@ pub async fn run_login_default(cli_config_overrides: CliConfigOverrides) -> ! {
             let email = outcome.tokens.id_token.email.clone();
             let plan =
                 ForallAuth::Oauth(forall_login::OauthAuth::new(outcome.tokens)).account_plan_type();
-            eprintln!("{}", oauth_status_line(email.as_deref(), plan));
+            print_oauth_status(email.as_deref(), plan);
             std::process::exit(0);
         }
         Ok(Err(err)) => {
@@ -193,6 +193,14 @@ pub async fn run_login_default(cli_config_overrides: CliConfigOverrides) -> ! {
             eprintln!("Login failed: the login flow terminated unexpectedly");
             std::process::exit(1);
         }
+    }
+}
+
+fn print_oauth_status(email: Option<&str>, plan: Option<PlanType>) {
+    if std::io::stderr().is_terminal() {
+        eprintln!("{}", oauth_status_line(email, plan));
+    } else {
+        eprintln!("Logged in with your Forall account");
     }
 }
 
@@ -369,28 +377,21 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     .await
     {
         Ok(Some(auth)) => match auth.auth_mode() {
-            AuthMode::ApiKey => match auth.get_token() {
-                Ok(api_key) => {
-                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
-                    std::process::exit(0);
-                }
-                Err(_) => {
-                    // auth.json stores provider-specific keys without a primary
-                    // OpenAI/OpenRouter key; still a logged-in state.
+            AuthMode::ApiKey => {
+                if auth.api_key().is_some() {
+                    eprintln!("Logged in using an API key");
+                } else {
                     eprintln!("Logged in using provider-specific API keys");
-                    std::process::exit(0);
                 }
-            },
+                std::process::exit(0);
+            }
             AuthMode::BedrockApiKey => {
                 eprintln!("Logged in using Amazon Bedrock API key");
                 std::process::exit(0);
             }
             AuthMode::Oauth => {
                 let email = auth.get_account_email();
-                eprintln!(
-                    "{}",
-                    oauth_status_line(email.as_deref(), auth.account_plan_type())
-                );
+                print_oauth_status(email.as_deref(), auth.account_plan_type());
                 std::process::exit(0);
             }
         },
@@ -459,15 +460,6 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
     }
 }
 
-fn safe_format_key(key: &str) -> String {
-    if key.len() <= 13 {
-        return "***".to_string();
-    }
-    let prefix = &key[..8];
-    let suffix = &key[key.len() - 5..];
-    format!("{prefix}***{suffix}")
-}
-
 #[cfg(test)]
 mod tests {
     use forall_config::types::AuthCredentialsStoreMode;
@@ -479,7 +471,6 @@ mod tests {
 
     use super::clear_existing_auth_before_login;
     use super::oauth_status_line;
-    use super::safe_format_key;
     use forall_protocol::account::PlanType;
 
     #[tokio::test]
@@ -528,17 +519,5 @@ mod tests {
             oauth_status_line(None, None),
             "Logged in with your Forall account"
         );
-    }
-
-    #[test]
-    fn formats_long_key() {
-        let key = "sk-proj-1234567890ABCDE";
-        assert_eq!(safe_format_key(key), "sk-proj-***ABCDE");
-    }
-
-    #[test]
-    fn short_key_returns_stars() {
-        let key = "sk-proj-12345";
-        assert_eq!(safe_format_key(key), "***");
     }
 }

@@ -452,8 +452,7 @@ mod tests {
         let state = provider.account_state().expect("account state");
         assert!(
             matches!(state.account, Some(ProviderAccount::Chatgpt { .. })),
-            "a signed-in Forall account must surface through the astrio provider, got {:?}",
-            state.account
+            "a signed-in Forall account must surface through the astrio provider"
         );
     }
 

@@ -141,23 +141,22 @@ impl GithubConnectFlow {
         struct StartResponse {
             authorize_url: String,
         }
-        let client = crate::auth::default_client::build_reqwest_client();
-        let response = client
-            .post(format!(
-                "{}/connections/github/start",
-                opts.base_urls.base_url()
-            ))
-            .bearer_auth(&opts.account_access_token)
-            .form(&[
-                ("redirect_uri", redirect_uri.as_str()),
-                ("state", state.as_str()),
-                ("code_challenge", pkce.challenge.as_str()),
-                ("code_challenge_method", "S256"),
-            ])
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|err| GithubConnectError::Start(err.to_string()))?;
+        let response = crate::auth::default_client::credential_request(
+            reqwest::Method::POST,
+            &format!("{}/connections/github/start", opts.base_urls.base_url()),
+        )
+        .map_err(|err| GithubConnectError::Start(err.to_string()))?
+        .bearer_auth(&opts.account_access_token)
+        .form(&[
+            ("redirect_uri", redirect_uri.as_str()),
+            ("state", state.as_str()),
+            ("code_challenge", pkce.challenge.as_str()),
+            ("code_challenge_method", "S256"),
+        ])
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|err| GithubConnectError::Start(err.to_string()))?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(GithubConnectError::NotSignedIn);
@@ -386,13 +385,8 @@ impl ConnectWorker {
             scopes: Vec<String>,
         }
 
-        let client = reqwest::blocking::Client::builder()
-            .default_headers(crate::auth::default_client::default_headers())
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|err| GithubConnectError::Exchange(err.to_string()))?;
-        let response = client
-            .post(&self.token_url)
+        let response = crate::auth::default_client::blocking_credential_post(&self.token_url)
+            .map_err(|err| GithubConnectError::Exchange(err.to_string()))?
             .form(&[
                 ("code", code),
                 ("code_verifier", self.pkce_verifier.as_str()),
@@ -477,17 +471,18 @@ pub async fn disconnect_github(
         return Ok(false);
     };
 
-    let client = crate::auth::default_client::build_reqwest_client();
-    match client
-        .post(format!(
-            "{}/connections/github/revoke",
-            base_urls.base_url()
-        ))
+    let revoke = async {
+        crate::auth::default_client::credential_request(
+            reqwest::Method::POST,
+            &format!("{}/connections/github/revoke", base_urls.base_url()),
+        )?
         .form(&[("token", connection.access_token.as_str())])
         .timeout(Duration::from_secs(15))
         .send()
         .await
-    {
+        .map_err(std::io::Error::other)
+    };
+    match revoke.await {
         Ok(response) if !response.status().is_success() => {
             tracing::warn!(
                 "github revoke endpoint returned HTTP {} during disconnect",

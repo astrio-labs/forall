@@ -47,5 +47,9 @@ jobs:
         run: cargo test --locked -p forall-workflow --lib 'verify::'
       - name: Check passing and failing local properties
         run: cargo test --locked -p forall-workflow --test workflow_extensions python_property_
+      - name: Test account transport and diagnostic dumps
+        run: |
+          cargo test --locked -p forall-login --lib default_client::tests::credential_
+          cargo test --locked -p forall-responses-api-proxy --lib dump::tests
       - name: Exercise an editing turn with a local model fixture
         run: cargo test --locked -p forall-exec --test all test_apply_patch_tool

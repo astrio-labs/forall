@@ -149,12 +149,11 @@ impl AccountRequestProcessor {
         path: &str,
     ) -> Result<T, JSONRPCErrorError> {
         let url = format!("{}{path}", forall_api_account_base());
-        let client = forall_login::default_client::build_reqwest_client();
         let token = auth.get_token().map_err(|err| {
             internal_error(format!("failed to read the Forall access token: {err}"))
         })?;
 
-        let mut response = send_hosted_account_get(&client, &url, &token).await?;
+        let mut response = send_hosted_account_get(&url, &token).await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             self.auth_manager.refresh_token().await.map_err(|err| {
                 invalid_request(format!("{RELOGIN_REQUIRED} (token refresh failed: {err})"))
@@ -166,7 +165,7 @@ impl AccountRequestProcessor {
                 .and_then(|refreshed| refreshed.get_token().ok())
                 .filter(|token| !token.is_empty())
                 .ok_or_else(|| invalid_request(RELOGIN_REQUIRED))?;
-            response = send_hosted_account_get(&client, &url, &refreshed_token).await?;
+            response = send_hosted_account_get(&url, &refreshed_token).await?;
             if response.status() == reqwest::StatusCode::UNAUTHORIZED {
                 return Err(invalid_request(RELOGIN_REQUIRED));
             }
@@ -187,12 +186,11 @@ impl AccountRequestProcessor {
 }
 
 async fn send_hosted_account_get(
-    client: &reqwest::Client,
     url: &str,
     token: &str,
 ) -> Result<reqwest::Response, JSONRPCErrorError> {
-    client
-        .get(url)
+    forall_login::default_client::credential_request(reqwest::Method::GET, url)
+        .map_err(|err| invalid_request(format!("invalid Forall account endpoint: {err}")))?
         .bearer_auth(token)
         .timeout(HOSTED_ACCOUNT_FETCH_TIMEOUT)
         .send()

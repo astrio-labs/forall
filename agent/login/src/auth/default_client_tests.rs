@@ -4,6 +4,51 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn credential_endpoints_require_tls_except_on_loopback() {
+    for url in [
+        "https://auth.example.org/oauth/token",
+        "http://localhost:9000",
+        "http://127.0.0.1:9000",
+        "http://[::1]:9000",
+    ] {
+        assert!(credential_endpoint(url).is_ok(), "{url}");
+    }
+    for url in [
+        "http://auth.example.org",
+        "http://localhost.example.org",
+        "http://localhost@auth.example.org",
+        "ftp://localhost",
+        "relative/path",
+    ] {
+        assert!(credential_endpoint(url).is_err(), "{url}");
+    }
+}
+
+#[tokio::test]
+async fn credential_request_returns_redirect_to_caller() {
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(path("/start"))
+        .respond_with(ResponseTemplate::new(307).insert_header("Location", "/next"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/next"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let response = credential_request(reqwest::Method::POST, &format!("{}/start", server.uri()))
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+}
+
+#[test]
 fn test_get_forall_user_agent() {
     let user_agent = get_forall_user_agent();
     let originator = originator().value;

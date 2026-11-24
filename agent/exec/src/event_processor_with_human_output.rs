@@ -220,7 +220,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             eprintln!("{} {}", format!("{key}:").style(self.bold), value);
         }
         eprintln!("--------");
-        eprintln!("{}\n{}", "user".style(self.cyan), prompt);
+        if std::io::stderr().is_terminal() {
+            eprintln!("{}\n{}", "user".style(self.cyan), prompt);
+        }
     }
 
     fn process_server_notification(&mut self, notification: ServerNotification) -> ForallStatus {

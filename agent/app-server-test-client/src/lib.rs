@@ -1140,7 +1140,6 @@ async fn test_login(
         } else {
             client.login_account_chatgpt()?
         };
-        println!("< account/login/start response: {login_response:?}");
         if !matches!(login_response, LoginAccountResponse::ApiKey {}) {
             bail!("expected apiKey login response");
         }
@@ -1896,8 +1895,12 @@ impl ForallClient {
             .context("client request was not a valid JSON-RPC request")?;
         request.trace = current_span_w3c_trace_context();
         let request_json = serde_json::to_string(&request)?;
-        let request_pretty = serde_json::to_string_pretty(&request)?;
-        print_multiline_with_prefix("> ", &request_pretty);
+        if request.method == "account/login/start" {
+            println!("> account/login/start");
+        } else {
+            let request_pretty = serde_json::to_string_pretty(&request)?;
+            print_multiline_with_prefix("> ", &request_pretty);
+        }
         self.write_payload(&request_json)
     }
 
@@ -1906,7 +1909,8 @@ impl ForallClient {
         T: DeserializeOwned,
     {
         loop {
-            let message = self.read_jsonrpc_message()?;
+            let message = self
+                .read_jsonrpc_message((method == "account/login/start").then_some(&request_id))?;
 
             match message {
                 JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
@@ -1917,6 +1921,9 @@ impl ForallClient {
                 }
                 JSONRPCMessage::Error(err) => {
                     if err.id == request_id {
+                        if method == "account/login/start" {
+                            bail!("{method} failed");
+                        }
                         bail!("{method} failed: {err:?}");
                     }
                 }
@@ -1936,7 +1943,7 @@ impl ForallClient {
         }
 
         loop {
-            let message = self.read_jsonrpc_message()?;
+            let message = self.read_jsonrpc_message(None)?;
 
             match message {
                 JSONRPCMessage::Notification(notification) => return Ok(notification),
@@ -1951,7 +1958,10 @@ impl ForallClient {
         }
     }
 
-    fn read_jsonrpc_message(&mut self) -> Result<JSONRPCMessage> {
+    fn read_jsonrpc_message(
+        &mut self,
+        private_response: Option<&RequestId>,
+    ) -> Result<JSONRPCMessage> {
         loop {
             let raw = self.read_payload()?;
             let trimmed = raw.trim();
@@ -1961,10 +1971,18 @@ impl ForallClient {
 
             let parsed: Value =
                 serde_json::from_str(trimmed).context("response was not valid JSON-RPC")?;
-            let pretty = serde_json::to_string_pretty(&parsed)?;
-            print_multiline_with_prefix("< ", &pretty);
             let message: JSONRPCMessage = serde_json::from_value(parsed)
                 .context("response was not a valid JSON-RPC message")?;
+            let response_id = match &message {
+                JSONRPCMessage::Response(response) => Some(&response.id),
+                JSONRPCMessage::Error(error) => Some(&error.id),
+                _ => None,
+            };
+            if private_response.is_some() && response_id == private_response {
+                println!("< account/login/start");
+            } else {
+                print_multiline_with_prefix("< ", &serde_json::to_string_pretty(&message)?);
+            }
             return Ok(message);
         }
     }

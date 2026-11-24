@@ -186,7 +186,7 @@ async fn login_account_oauth_completes_and_updates_account() -> Result<()> {
     let (login_id, auth_url) = start_oauth_login(&mut mcp).await?;
     assert!(
         auth_url.starts_with(&format!("{auth_base_url}/oauth/authorize?")),
-        "unexpected auth url: {auth_url}"
+        "expected the mock authorization endpoint"
     );
 
     // The authorization URL carries the loopback redirect and CSRF state;

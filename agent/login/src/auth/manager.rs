@@ -478,9 +478,15 @@ pub async fn revoke_stored_oauth_tokens_best_effort(
         return;
     };
 
-    let client = crate::auth::default_client::build_reqwest_client();
-    match client
-        .post(base_urls.revoke_url())
+    let request = crate::auth::default_client::credential_request(
+        reqwest::Method::POST,
+        &base_urls.revoke_url(),
+    );
+    let Ok(request) = request else {
+        tracing::warn!("could not prepare the auth revocation request");
+        return;
+    };
+    match request
         .form(&[("token", tokens.refresh_token.as_str())])
         .send()
         .await
@@ -1671,20 +1677,21 @@ impl AuthManager {
             refresh_token: String,
         }
 
-        let client = crate::auth::default_client::build_reqwest_client();
-        let response = client
-            .post(self.auth_base_urls.token_url())
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", current.refresh_token.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|err| {
-                RefreshTokenError::Transient(std::io::Error::other(format!(
-                    "failed to reach the Forall auth service: {err}"
-                )))
-            })?;
+        let response = crate::auth::default_client::credential_request(
+            reqwest::Method::POST,
+            &self.auth_base_urls.token_url(),
+        )?
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", current.refresh_token.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|err| {
+            RefreshTokenError::Transient(std::io::Error::other(format!(
+                "failed to reach the Forall auth service: {err}"
+            )))
+        })?;
 
         let status = response.status();
         if status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::UNAUTHORIZED

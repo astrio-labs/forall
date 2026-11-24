@@ -1,6 +1,8 @@
 use std::fs;
 use std::io;
 use std::io::Read;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -185,6 +187,9 @@ impl From<(&reqwest::header::HeaderName, &reqwest::header::HeaderValue)> for Hea
 
 fn should_redact_header(name: &str) -> bool {
     name.eq_ignore_ascii_case(AUTHORIZATION_HEADER_NAME)
+        || name.eq_ignore_ascii_case("proxy-authorization")
+        || name.eq_ignore_ascii_case("api-key")
+        || name.eq_ignore_ascii_case("x-api-key")
         || name.to_ascii_lowercase().contains("cookie")
 }
 
@@ -193,11 +198,18 @@ fn dump_body(body: &[u8]) -> Value {
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(body).into_owned()))
 }
 
-fn write_json_dump(path: &PathBuf, dump: &impl Serialize) -> io::Result<()> {
+fn write_json_dump(path: &Path, dump: &impl Serialize) -> io::Result<()> {
     let mut bytes = serde_json::to_vec_pretty(dump)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
     bytes.push(b'\n');
-    fs::write(path, bytes)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(&bytes)
 }
 
 #[cfg(test)]
@@ -222,6 +234,22 @@ mod tests {
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn dump_files_are_private_and_existing_files_are_preserved() {
+        let dir = test_dump_dir();
+        let file = dir.join("exchange.json");
+        super::write_json_dump(&file, &"first").unwrap();
+        let error = super::write_json_dump(&file, &"second").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "\"first\"\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o077, 0);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn dump_request_writes_redacted_headers_and_json_body() {
         let dump_dir = test_dump_dir();
         let dumper = ExchangeDumper::new(dump_dir.clone()).expect("create dumper");
@@ -229,6 +257,7 @@ mod tests {
             Header::from_bytes(&b"Authorization"[..], &b"Bearer secret"[..])
                 .expect("authorization header"),
             Header::from_bytes(&b"Cookie"[..], &b"user-session=secret"[..]).expect("cookie header"),
+            Header::from_bytes(&b"X-Api-Key"[..], &b"test-key"[..]).expect("api key header"),
             Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                 .expect("content-type header"),
             Header::from_bytes(&b"x-forall-window-id"[..], &b"thread-1:0"[..])
@@ -263,6 +292,10 @@ mod tests {
                     },
                     {
                         "name": "Cookie",
+                        "value": "[REDACTED]"
+                    },
+                    {
+                        "name": "X-Api-Key",
                         "value": "[REDACTED]"
                     },
                     {

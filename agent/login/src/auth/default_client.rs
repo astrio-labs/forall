@@ -228,6 +228,57 @@ pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransp
     build_reqwest_client_with_custom_ca(default_reqwest_client_builder())
 }
 
+/// Authentication endpoints require TLS off-machine. Loopback HTTP is used
+/// by local auth services and their test fixtures.
+pub(crate) fn credential_endpoint(raw: &str) -> std::io::Result<url::Url> {
+    let url = url::Url::parse(raw).map_err(std::io::Error::other)?;
+    let loopback = match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(name)) => name == "localhost",
+        None => false,
+    };
+    if url.scheme() == "https" || (url.scheme() == "http" && loopback) {
+        return Ok(url);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "authentication endpoints require HTTPS or loopback HTTP",
+    ))
+}
+
+/// Keep credentials at the configured endpoint, including on redirects.
+pub fn credential_request(
+    method: reqwest::Method,
+    raw: &str,
+) -> std::io::Result<reqwest::RequestBuilder> {
+    let url = credential_endpoint(raw)?;
+    let builder = default_reqwest_client_builder().redirect(reqwest::redirect::Policy::none());
+    let builder = if url.scheme() == "http" {
+        builder.no_proxy()
+    } else {
+        builder.https_only(true)
+    };
+    let client = build_reqwest_client_with_custom_ca(builder).map_err(std::io::Error::other)?;
+    Ok(client.request(method, url))
+}
+
+pub(crate) fn blocking_credential_post(
+    raw: &str,
+) -> std::io::Result<reqwest::blocking::RequestBuilder> {
+    let url = credential_endpoint(raw)?;
+    let builder = reqwest::blocking::Client::builder()
+        .default_headers(default_headers())
+        .redirect(reqwest::redirect::Policy::none());
+    let builder = if url.scheme() == "http" {
+        builder.no_proxy()
+    } else {
+        builder.https_only(true)
+    };
+    let client = builder.build().map_err(std::io::Error::other)?;
+    Ok(client.post(url).timeout(std::time::Duration::from_secs(30)))
+}
+
 fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder().default_headers(default_headers());
     if is_sandboxed() {

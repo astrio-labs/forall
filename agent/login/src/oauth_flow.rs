@@ -214,8 +214,9 @@ impl OauthLoginFlow {
         let pkce = generate_pkce();
         let state = generate_state();
 
-        let mut auth_url = Url::parse(&opts.base_urls.authorize_url())
-            .map_err(|err| anyhow::anyhow!("invalid authorize URL: {err}"))?;
+        let mut auth_url =
+            crate::auth::default_client::credential_endpoint(&opts.base_urls.authorize_url())
+                .map_err(|err| anyhow::anyhow!("invalid authorize URL: {err}"))?;
         {
             let mut pairs = auth_url.query_pairs_mut();
             pairs
@@ -421,13 +422,8 @@ impl FlowWorker {
             refresh_token: String,
         }
 
-        let client = reqwest::blocking::Client::builder()
-            .default_headers(crate::auth::default_client::default_headers())
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|err| LoginError::Exchange(err.to_string()))?;
-        let response = client
-            .post(&self.token_url)
+        let response = crate::auth::default_client::blocking_credential_post(&self.token_url)
+            .map_err(|err| LoginError::Exchange(err.to_string()))?
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("code", code),
