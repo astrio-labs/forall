@@ -287,7 +287,36 @@ impl MetricsClient {
         let (meter_provider, meter) =
             build_provider(resource, exporter, export_interval, runtime_reader.clone());
 
-        Ok(Self(std::sync::Arc::new(MetricsClientInner {
+        Ok(Self::from_provider(
+            meter_provider,
+            meter,
+            runtime_reader,
+            default_tags,
+        ))
+    }
+
+    /// Collect on-demand timing snapshots without an exporter or a background worker.
+    pub fn local_runtime() -> Self {
+        let reader = Arc::new(
+            ManualReader::builder()
+                .with_temporality(Temporality::Delta)
+                .build(),
+        );
+        let provider = SdkMeterProvider::builder()
+            .with_resource(Resource::builder_empty().build())
+            .with_reader(SharedManualReader::new(reader.clone()))
+            .build();
+        let meter = provider.meter(METER_NAME);
+        Self::from_provider(provider, meter, Some(reader), BTreeMap::new())
+    }
+
+    fn from_provider(
+        meter_provider: SdkMeterProvider,
+        meter: Meter,
+        runtime_reader: Option<Arc<ManualReader>>,
+        default_tags: BTreeMap<String, String>,
+    ) -> Self {
+        Self(Arc::new(MetricsClientInner {
             meter_provider,
             meter,
             counters: Mutex::new(HashMap::new()),
@@ -296,7 +325,7 @@ impl MetricsClient {
             duration_histograms: Mutex::new(HashMap::new()),
             runtime_reader,
             default_tags,
-        })))
+        }))
     }
 
     /// Send a single counter increment.

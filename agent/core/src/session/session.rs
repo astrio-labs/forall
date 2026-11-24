@@ -775,7 +775,8 @@ impl Session {
                 terminal_type.clone(),
                 session_configuration.session_source.clone(),
             )
-            .with_auth_env(auth_env_telemetry.to_otel_metadata());
+            .with_local_runtime_metrics(config.features.enabled(Feature::RuntimeMetrics))
+        .with_auth_env(auth_env_telemetry.to_otel_metadata());
             if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
                 session_telemetry = session_telemetry.with_metrics_service_name(service_name);
             }

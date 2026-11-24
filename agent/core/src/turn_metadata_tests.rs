@@ -20,7 +20,6 @@ use forall_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::Command;
 
@@ -107,8 +106,6 @@ async fn create_clean_git_repo(repo_name: &str) -> (TempDir, AbsolutePathBuf) {
 
 #[tokio::test]
 async fn detached_memory_responses_metadata_omits_turn_identity() {
-    let (_temp_dir, repo_path) = create_clean_git_repo("repo-東京").await;
-
     let header = detached_memory_responses_metadata(
         String::new(),
         String::new(),
@@ -120,7 +117,6 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
     .turn_metadata_json()
     .expect("header");
     assert!(header.is_ascii());
-    assert!(!header.contains("東京"));
     let parsed: Value = serde_json::from_str(&header).expect("valid json");
     assert_eq!(parsed["request_kind"].as_str(), Some("memory"));
     assert!(parsed.get("session_id").is_none());
@@ -134,9 +130,6 @@ async fn detached_memory_responses_metadata_omits_turn_identity() {
 
 #[tokio::test]
 async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
-    let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().abs();
-
     let header = detached_memory_responses_metadata(
         String::new(),
         String::new(),

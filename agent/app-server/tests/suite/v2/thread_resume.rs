@@ -43,7 +43,6 @@ use forall_app_server_protocol::ThreadReadResponse;
 use forall_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use forall_app_server_protocol::ThreadResumeParams;
 use forall_app_server_protocol::ThreadResumeResponse;
-use forall_app_server_protocol::ThreadSource;
 use forall_app_server_protocol::ThreadStartParams;
 use forall_app_server_protocol::ThreadStartResponse;
 use forall_app_server_protocol::ThreadStatus;

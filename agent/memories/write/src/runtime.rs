@@ -150,6 +150,7 @@ impl MemoryStartupContext {
             user_agent(),
             source,
         )
+        .with_local_runtime_metrics(config.features.enabled(Feature::RuntimeMetrics))
         .with_auth_env(auth_env_telemetry.to_otel_metadata());
 
         Self {

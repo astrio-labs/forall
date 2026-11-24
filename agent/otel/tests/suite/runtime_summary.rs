@@ -1,6 +1,5 @@
 use eventsource_stream::Event as StreamEvent;
 use forall_otel::MetricsClient;
-use forall_otel::MetricsConfig;
 use forall_otel::Result;
 use forall_otel::RuntimeMetricTotals;
 use forall_otel::RuntimeMetricsSummary;
@@ -8,18 +7,13 @@ use forall_otel::SessionTelemetry;
 use forall_otel::TelemetryAuthMode;
 use forall_protocol::ThreadId;
 use forall_protocol::protocol::SessionSource;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 
 #[test]
 fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<()> {
-    let exporter = InMemoryMetricExporter::default();
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory("test", "forall-cli", env!("CARGO_PKG_VERSION"), exporter)
-            .with_runtime_reader(),
-    )?;
+    let metrics = MetricsClient::local_runtime();
     let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.1",

@@ -18,6 +18,14 @@ pub use tags::ORIGINATOR_TAG;
 pub use tags::SessionMetricTagValues;
 pub use tags::bounded_originator_tag_value;
 
+static LOCAL_RUNTIME_METRICS: std::sync::OnceLock<MetricsClient> = std::sync::OnceLock::new();
+
+pub(crate) fn local_runtime_metrics() -> MetricsClient {
+    LOCAL_RUNTIME_METRICS
+        .get_or_init(MetricsClient::local_runtime)
+        .clone()
+}
+
 pub fn global() -> Option<MetricsClient> {
-    None
+    LOCAL_RUNTIME_METRICS.get().cloned()
 }

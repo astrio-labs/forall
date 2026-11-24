@@ -1,6 +1,5 @@
 use anyhow::Context;
 use anyhow::Result;
-use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
@@ -8,11 +7,9 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_request_user_input_sse_response;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
-use app_test_support::write_mock_responses_config_toml_with_backend_url;
 use app_test_support::write_models_cache;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -85,7 +82,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use wiremock::ResponseTemplate;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);

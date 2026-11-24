@@ -438,12 +438,8 @@ impl Visit for FeedbackTagsVisitor {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-    use std::fs;
 
     use super::*;
-    use crate::FeedbackDiagnostic;
-    use pretty_assertions::assert_eq;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 

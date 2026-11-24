@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ApiKeyAuthFixture;
-use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_api_key_auth;

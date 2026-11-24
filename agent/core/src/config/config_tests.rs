@@ -35,7 +35,6 @@ use forall_config::permissions_toml::WorkspaceRootsToml;
 use forall_config::types::AppToolApproval;
 use forall_config::types::ApprovalsReviewer;
 use forall_config::types::BundledSkillsConfig;
-use forall_config::types::FeedbackConfigToml;
 use forall_config::types::HistoryPersistence;
 use forall_config::types::McpServerEnvVar;
 use forall_config::types::McpServerOAuthConfig;

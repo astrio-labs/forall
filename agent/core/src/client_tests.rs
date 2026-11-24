@@ -325,12 +325,9 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .expect("turn metadata"),
     )
     .expect("valid turn metadata");
+    assert!(!client_metadata.contains_key(X_CODEX_INSTALLATION_ID_HEADER));
+    assert!(turn_metadata.get("installation_id").is_none());
     for (client_key, metadata_key, expected) in [
-        (
-            X_CODEX_INSTALLATION_ID_HEADER,
-            "installation_id",
-            "11111111-1111-4111-8111-111111111111",
-        ),
         ("session_id", "session_id", thread_id.as_str()),
         ("thread_id", "thread_id", thread_id.as_str()),
         ("turn_id", "turn_id", "turn-123"),

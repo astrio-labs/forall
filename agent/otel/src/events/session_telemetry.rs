@@ -134,6 +134,12 @@ impl SessionTelemetry {
         self
     }
 
+    pub fn with_local_runtime_metrics(mut self, enabled: bool) -> Self {
+        self.metrics = enabled.then(crate::metrics::local_runtime_metrics);
+        self.metrics_use_metadata_tags = false;
+        self
+    }
+
     pub fn with_metrics(mut self, metrics: MetricsClient) -> Self {
         self.metrics = Some(metrics);
         self.metrics_use_metadata_tags = true;
